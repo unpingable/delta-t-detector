@@ -113,5 +113,5 @@ Apache 2.0
 
 ## Links
 
-- [Paper: You Need More Than Just Attention (Zenodo)](https://zenodo.org/)
+- [Paper: You Need More Than Just Attention (Zenodo)](https://zenodo.org/records/18039927)
 - [Substack: The Neutral Zone](https://neutralzone.substack.com/)
