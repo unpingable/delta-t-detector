@@ -1,0 +1,18 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.35.0
+datasets>=2.14.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+tqdm>=4.65.0
+python-Levenshtein>=0.21.0
+
+# Optional: Semantic similarity for Invariant 2
+sentence-transformers>=2.2.0
+
+# Optional: Citation validation for Invariant 3
+aiohttp>=3.8.0
+
+# Optional: Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
