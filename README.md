@@ -125,6 +125,11 @@ JSONL format:
 {"id":"seed-001","prompt":"...","expected_risk":"low","notes":"..."}
 ```
 
+Diff two eval runs:
+```bash
+python -m detector.run eval-diff --old run_a.csv --new run_b.csv --output changes.csv
+```
+
 ## Project Structure
 
 ```

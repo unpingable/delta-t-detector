@@ -130,6 +130,17 @@ def run_eval(args):
     )
 
 
+def run_eval_diff(args):
+    """Diff two eval CSV runs"""
+    from detector.eval_diff import diff_csv
+    diff_csv(
+        old_path=args.old,
+        new_path=args.new,
+        output_csv=args.output,
+        confidence_delta=args.conf_delta
+    )
+
+
 def show_device_info(args):
     """Show available compute devices"""
     print("Δt Detector - Device Information")
@@ -271,6 +282,14 @@ Examples:
                              help='Use baseline normalization if available')
     eval_parser.add_argument('--output', type=str, default=None,
                              help='Write CSV output to file (default: stdout)')
+
+    # Eval diff command
+    diff_parser = subparsers.add_parser('eval-diff', help='Diff two eval CSV runs')
+    diff_parser.add_argument('--old', type=str, required=True, help='Old CSV file')
+    diff_parser.add_argument('--new', type=str, required=True, help='New CSV file')
+    diff_parser.add_argument('--output', type=str, default=None, help='Write CSV of changes')
+    diff_parser.add_argument('--conf-delta', type=float, default=0.1,
+                             help='Minimum confidence delta to count as change')
     
     # Devices command
     devices_parser = subparsers.add_parser('devices', help='Show available compute devices')
@@ -285,6 +304,8 @@ Examples:
         run_experiment(args)
     elif args.command == 'eval':
         run_eval(args)
+    elif args.command == 'eval-diff':
+        run_eval_diff(args)
     elif args.command == 'devices':
         show_device_info(args)
     else:

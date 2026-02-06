@@ -37,6 +37,7 @@ from detector.reporting import (
     build_signal, SIGNAL_SCHEMA_VERSION
 )
 from detector.eval import compute_guard_flags
+from detector.eval_diff import diff_csv
 
 
 # ============================================================================
@@ -728,6 +729,30 @@ class TestEvalHarness:
         assert flags['low_evidence'] is True
         assert flags['anomaly'] is True
         assert flags['debt_cap'] is True
+
+
+class TestEvalDiff:
+    """Tests for eval diff utility"""
+    
+    def test_eval_diff_counts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_path = os.path.join(tmpdir, "old.csv")
+            new_path = os.path.join(tmpdir, "new.csv")
+            
+            with open(old_path, "w", newline="") as f:
+                f.write("id,prediction,confidence\n")
+                f.write("a,truthful,0.9\n")
+                f.write("b,uncertain,0.5\n")
+            
+            with open(new_path, "w", newline="") as f:
+                f.write("id,prediction,confidence\n")
+                f.write("a,uncertain,0.7\n")
+                f.write("b,uncertain,0.65\n")
+            
+            total, changed_pred, changed_conf = diff_csv(old_path, new_path, confidence_delta=0.1)
+            assert total == 2
+            assert changed_pred == 1
+            assert changed_conf == 2
 
 class TestFeatureSerialization:
     """Tests for feature serialization"""
