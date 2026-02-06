@@ -701,6 +701,11 @@ class TestReporting:
         signal2 = build_signal(report)
         assert signal1['provenance']['generation_hash'] == signal2['provenance']['generation_hash']
 
+    def test_signal_schema_file_exists(self):
+        """Signal schema file should exist"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        schema_path = os.path.join(root, 'schema', 'signal.schema.json')
+        assert os.path.exists(schema_path)
 
 class TestFeatureSerialization:
     """Tests for feature serialization"""
