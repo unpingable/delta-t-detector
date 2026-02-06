@@ -110,6 +110,7 @@ The signal schema includes:
 - `signals` (temporal feature vector)
 - `invariants` (per-invariant scores/violations)
 - `provenance` (generation hash, length, phase stats)
+- JSON Schema: `schema/signal.schema.json`
 
 ## Project Structure
 

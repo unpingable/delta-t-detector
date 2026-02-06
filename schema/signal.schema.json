@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "signal.schema.json",
+  "title": "DeltaT Detector Signal",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "prediction",
+    "confidence",
+    "temporal_debt",
+    "temporal_debt_components",
+    "temporal_debt_weights",
+    "risk_profile",
+    "model_baseline",
+    "anomaly_score",
+    "invariants",
+    "signals",
+    "provenance",
+    "timestamp"
+  ],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "prediction": { "type": "string", "enum": ["truthful", "hallucination", "uncertain", "unknown"] },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "temporal_debt": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "temporal_debt_components": {
+      "type": "object",
+      "required": ["belief_change", "evidence", "phase_penalty"],
+      "properties": {
+        "belief_change": { "type": "number" },
+        "evidence": { "type": "number" },
+        "phase_penalty": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "temporal_debt_weights": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "risk_profile": { "type": "string" },
+    "model_baseline": { "type": ["string", "null"] },
+    "anomaly_score": { "type": ["number", "null"] },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["score", "violated"],
+        "properties": {
+          "score": { "type": "number" },
+          "violated": { "type": "boolean" },
+          "confidence": { "type": "number" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "signals": {
+      "type": "object",
+      "properties": {
+        "max_confidence_slope": { "type": "number" },
+        "mean_confidence": { "type": "number" },
+        "confidence_acceleration": { "type": "number" },
+        "final_confidence": { "type": "number" },
+        "tail_confidence_mean": { "type": "number" },
+        "tokens_to_high_conf": { "type": "number" },
+        "max_entropy_jump": { "type": "number" },
+        "entropy_variance": { "type": "number" },
+        "entropy_recovery_detected": { "type": ["number", "boolean"] },
+        "token_jaccard": { "type": "number" },
+        "perturbation_sensitivity": { "type": "number" },
+        "early_phase_entropy": { "type": "number" },
+        "middle_phase_entropy": { "type": "number" },
+        "late_phase_entropy": { "type": "number" },
+        "answer_surfaced_early": { "type": ["number", "boolean"] },
+        "confidence_second_derivative": { "type": "number" },
+        "logprob_variance": { "type": "number" },
+        "entropy_trajectory_slope": { "type": "number" },
+        "confidence_monotonicity": { "type": "number" },
+        "generation_length": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "generation_hash",
+        "generation_length",
+        "phase_token_counts",
+        "phase_transition_index",
+        "entropy_trajectory_slope"
+      ],
+      "properties": {
+        "generation_hash": { "type": "string" },
+        "generation_length": { "type": "number" },
+        "phase_token_counts": {
+          "type": "object",
+          "required": ["early", "middle", "late"],
+          "properties": {
+            "early": { "type": "number" },
+            "middle": { "type": "number" },
+            "late": { "type": "number" }
+          },
+          "additionalProperties": false
+        },
+        "phase_transition_index": { "type": ["number", "null"] },
+        "entropy_trajectory_slope": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "timestamp": { "type": "string" }
+  },
+  "additionalProperties": false
+}
