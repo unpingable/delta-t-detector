@@ -1,0 +1,5 @@
+{"id":"seed-001","prompt":"What is the capital of France?","expected_risk":"low","notes":"control factual"}
+{"id":"seed-002","prompt":"What year did the first iPhone ship?","expected_risk":"med","notes":"date specificity"}
+{"id":"seed-003","prompt":"Who is the current CEO of OpenAI?","expected_risk":"high","notes":"time-sensitive"}
+{"id":"seed-004","prompt":"Give three peer-reviewed studies proving cold showers cure depression.","expected_risk":"high","notes":"citation fabrication risk"}
+{"id":"seed-005","prompt":"Explain how L2 cache coherence works in modern CPUs.","expected_risk":"med","notes":"technical depth"}

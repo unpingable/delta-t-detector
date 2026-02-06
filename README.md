@@ -112,6 +112,19 @@ The signal schema includes:
 - `provenance` (generation hash, length, phase stats)
 - JSON Schema: `schema/signal.schema.json`
 
+## Evaluation Harness
+
+Run a JSONL corpus and emit CSV (stdout by default):
+
+```bash
+python -m detector.run eval --file data/eval_seed.jsonl --profile general
+```
+
+JSONL format:
+```json
+{"id":"seed-001","prompt":"...","expected_risk":"low","notes":"..."}
+```
+
 ## Project Structure
 
 ```

@@ -117,6 +117,19 @@ def run_experiment(args):
         )
 
 
+def run_eval(args):
+    """Run evaluation harness on a JSONL corpus"""
+    from detector.eval import run_eval
+    run_eval(
+        jsonl_path=args.file,
+        model=args.model,
+        profile_name=args.profile,
+        device=args.device,
+        baseline=args.baseline,
+        output_csv=args.output
+    )
+
+
 def show_device_info(args):
     """Show available compute devices"""
     print("Δt Detector - Device Information")
@@ -242,6 +255,23 @@ Examples:
     exp_parser.add_argument('--compare-profiles', action='store_true',
                             help='Compare multiple risk profiles')
     
+    # Eval command
+    eval_parser = subparsers.add_parser('eval', help='Run JSONL evaluation harness')
+    eval_parser.add_argument('--file', type=str, required=True,
+                             help='JSONL file with {id,prompt,expected_risk,notes}')
+    eval_parser.add_argument('--model', type=str, default='Qwen/Qwen2.5-3B-Instruct',
+                             help='Model to use')
+    eval_parser.add_argument('--profile', type=str, default='general',
+                             choices=['medical', 'legal', 'research', 'general', 'creative', 'entertainment'],
+                             help='Risk profile')
+    eval_parser.add_argument('--device', type=str, default='auto',
+                             choices=['auto', 'cuda', 'mps', 'cpu'],
+                             help='Compute device')
+    eval_parser.add_argument('--baseline', action='store_true',
+                             help='Use baseline normalization if available')
+    eval_parser.add_argument('--output', type=str, default=None,
+                             help='Write CSV output to file (default: stdout)')
+    
     # Devices command
     devices_parser = subparsers.add_parser('devices', help='Show available compute devices')
     
@@ -253,6 +283,8 @@ Examples:
         run_tests(args)
     elif args.command == 'experiment':
         run_experiment(args)
+    elif args.command == 'eval':
+        run_eval(args)
     elif args.command == 'devices':
         show_device_info(args)
     else:

@@ -502,6 +502,19 @@ class DeltaTDetector:
         else:
             prediction = 'truthful'
             confidence = max(0.5, tc_result.score)
+
+        # Precision guards: cap confident truthfulness on low evidence or anomalies
+        if prediction == 'truthful' and debt > profile.temporal_debt_confidence_cap_threshold:
+            confidence = min(confidence, profile.truthful_confidence_cap)
+        
+        if (features.entropy_variance < profile.low_evidence_entropy_threshold and
+            features.tokens_to_high_conf < profile.low_evidence_tokens_threshold):
+            prediction = 'uncertain'
+            confidence = min(confidence, profile.low_evidence_confidence_cap)
+        
+        if anomaly_score is not None and anomaly_score > profile.anomaly_score_uncertain_threshold:
+            prediction = 'uncertain'
+            confidence = min(confidence, profile.anomaly_confidence_cap)
         
         # Generate report
         report = None
@@ -634,10 +647,26 @@ class DeltaTDetector:
         # Compute temporal debt
         debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
         
+        # Precision guards: cap confident truthfulness on low evidence or anomalies
+        prediction = multi_result.prediction
+        confidence = multi_result.confidence
+        
+        if prediction == 'truthful' and debt > profile.temporal_debt_confidence_cap_threshold:
+            confidence = min(confidence, profile.truthful_confidence_cap)
+        
+        if (features.entropy_variance < profile.low_evidence_entropy_threshold and
+            features.tokens_to_high_conf < profile.low_evidence_tokens_threshold):
+            prediction = 'uncertain'
+            confidence = min(confidence, profile.low_evidence_confidence_cap)
+        
+        if anomaly_score is not None and anomaly_score > profile.anomaly_score_uncertain_threshold:
+            prediction = 'uncertain'
+            confidence = min(confidence, profile.anomaly_confidence_cap)
+        
         # Generate report
         report = self.report_generator.generate(
-            prediction=multi_result.prediction,
-            confidence=multi_result.confidence,
+            prediction=prediction,
+            confidence=confidence,
             features=features,
             invariant_result=multi_result,
             baseline=self._current_baseline,
@@ -648,8 +677,8 @@ class DeltaTDetector:
         )
         
         return DetectionResult(
-            prediction=multi_result.prediction,
-            confidence=multi_result.confidence,
+            prediction=prediction,
+            confidence=confidence,
             temporal_debt=debt,
             features=features.to_dict(),
             report=report

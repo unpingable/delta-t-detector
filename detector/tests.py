@@ -36,6 +36,7 @@ from detector.reporting import (
     DetectionReport, ReportGenerator, format_console_report,
     build_signal, SIGNAL_SCHEMA_VERSION
 )
+from detector.eval import compute_guard_flags
 
 
 # ============================================================================
@@ -706,6 +707,27 @@ class TestReporting:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         schema_path = os.path.join(root, 'schema', 'signal.schema.json')
         assert os.path.exists(schema_path)
+
+
+class TestEvalHarness:
+    """Tests for evaluation harness helpers"""
+    
+    def test_compute_guard_flags(self):
+        profile = RISK_PROFILES['general']
+        features = {
+            'entropy_variance': 0.1,
+            'tokens_to_high_conf': 3
+        }
+        flags = compute_guard_flags(
+            features,
+            profile,
+            temporal_debt=0.2,
+            anomaly_score=2.0,
+            prediction='truthful'
+        )
+        assert flags['low_evidence'] is True
+        assert flags['anomaly'] is True
+        assert flags['debt_cap'] is True
 
 class TestFeatureSerialization:
     """Tests for feature serialization"""
