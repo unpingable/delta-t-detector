@@ -676,6 +676,8 @@ class TestReporting:
         assert 'temporal_debt_weights' in signal
         assert 'provenance' in signal
         assert signal['provenance']['generation_length'] == 42
+        assert 'why' in signal
+        assert signal['why']['label'] == 'truthful'
     
     def test_signal_generation_hash_stable(self):
         """Generation hash should be stable for identical generations"""

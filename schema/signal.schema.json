@@ -16,6 +16,7 @@
     "invariants",
     "signals",
     "provenance",
+    "why",
     "timestamp"
   ],
   "properties": {
@@ -103,6 +104,28 @@
         },
         "phase_transition_index": { "type": ["number", "null"] },
         "entropy_trajectory_slope": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "why": {
+      "type": "object",
+      "required": ["label", "reasons", "metrics"],
+      "properties": {
+        "label": { "type": "string" },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "temporal_debt": { "type": ["number", "null"] },
+            "entropy_variance": { "type": ["number", "null"] },
+            "tokens_to_high_conf": { "type": ["number", "null"] },
+            "anomaly_score": { "type": ["number", "null"] }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

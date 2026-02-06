@@ -423,6 +423,19 @@ def build_signal(report: DetectionReport) -> Dict[str, Any]:
         weights=profile.temporal_debt_weights
     )
     
+    reasons = []
+    if components['belief_change'] > 0.3:
+        reasons.append("rapid_confidence_shift")
+    if components['phase_penalty'] > 0.0:
+        reasons.append("phase_violation")
+    if report.temporal_debt_score > profile.temporal_debt_confidence_cap_threshold:
+        reasons.append("elevated_temporal_debt")
+    if report.anomaly_score is not None and report.anomaly_score > profile.anomaly_score_uncertain_threshold:
+        reasons.append("anomalous_vs_baseline")
+    if (report.temporal_features.get('entropy_variance', 1.0) < profile.low_evidence_entropy_threshold and
+        report.temporal_features.get('tokens_to_high_conf', 0.0) < profile.low_evidence_tokens_threshold):
+        reasons.append("low_evidence_fast_confidence")
+    
     return {
         'schema_version': SIGNAL_SCHEMA_VERSION,
         'prediction': report.prediction,
@@ -445,6 +458,16 @@ def build_signal(report: DetectionReport) -> Dict[str, Any]:
             'phase_token_counts': phase_counts,
             'phase_transition_index': report.temporal_features.get('phase_transition_index'),
             'entropy_trajectory_slope': report.temporal_features.get('entropy_trajectory_slope')
+        },
+        'why': {
+            'label': report.prediction,
+            'reasons': reasons,
+            'metrics': {
+                'temporal_debt': report.temporal_debt_score,
+                'entropy_variance': report.temporal_features.get('entropy_variance'),
+                'tokens_to_high_conf': report.temporal_features.get('tokens_to_high_conf'),
+                'anomaly_score': report.anomaly_score
+            }
         },
         'timestamp': report.timestamp
     }
