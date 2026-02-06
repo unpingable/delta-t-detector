@@ -98,7 +98,12 @@ def run_tests(args):
 
 def run_experiment(args):
     """Run TruthfulQA validation experiment"""
-    from detector.truthfulqa_experiment import run_experiment, compare_risk_profiles
+    try:
+        from detector.truthfulqa_experiment import run_experiment, compare_risk_profiles
+    except ImportError:
+        print("Error: TruthfulQA experiment module not found.")
+        print("Missing file: detector/truthfulqa_experiment.py")
+        sys.exit(1)
     
     if args.compare_profiles:
         compare_risk_profiles(num_samples=args.samples)

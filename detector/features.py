@@ -90,6 +90,7 @@ class TemporalFeatures:
             'early_phase_entropy': self.early_phase_entropy,
             'middle_phase_entropy': self.middle_phase_entropy,
             'late_phase_entropy': self.late_phase_entropy,
+            'phase_transition_index': self.phase_transition_index,
             'answer_surfaced_early': float(self.answer_surfaced_early),
             'confidence_second_derivative': self.confidence_second_derivative,
             'logprob_variance': self.logprob_variance,
@@ -360,7 +361,53 @@ def extract_features_from_raw(
     return extractor.extract(traces, levenshtein_func)
 
 
-def compute_temporal_debt(features: TemporalFeatures, baseline_mean: float = 0.5) -> float:
+def compute_temporal_debt_components(
+    features: TemporalFeatures,
+    weights: Optional[Dict[str, float]] = None
+) -> Dict[str, float]:
+    """
+    Compute temporal debt components for explainability and governance.
+    """
+    if weights is None:
+        weights = {
+            'max_confidence_slope': 0.3,
+            'confidence_acceleration': 0.2,
+            'tokens_to_high_conf': 0.2,
+            'entropy_variance': 0.1,
+            'perturbation_sensitivity': 0.2,
+            'answer_surfaced_early': 0.2,
+            'entropy_recovery_detected': 0.1
+        }
+    
+    belief_change = (
+        features.max_confidence_slope * weights.get('max_confidence_slope', 0.0) +
+        features.confidence_acceleration * weights.get('confidence_acceleration', 0.0) +
+        (1.0 - features.tokens_to_high_conf / 20.0) * weights.get('tokens_to_high_conf', 0.0)
+    )
+    
+    evidence = (
+        features.entropy_variance * weights.get('entropy_variance', 0.0) +
+        features.perturbation_sensitivity * weights.get('perturbation_sensitivity', 0.0)
+    )
+    
+    phase_penalty = 0.0
+    if features.answer_surfaced_early:
+        phase_penalty += weights.get('answer_surfaced_early', 0.0)
+    if features.entropy_recovery_detected:
+        phase_penalty += weights.get('entropy_recovery_detected', 0.0)
+    
+    return {
+        'belief_change': belief_change,
+        'evidence': evidence,
+        'phase_penalty': phase_penalty,
+        'raw_total': belief_change + evidence + phase_penalty
+    }
+
+
+def compute_temporal_debt(
+    features: TemporalFeatures,
+    weights: Optional[Dict[str, float]] = None
+) -> float:
     """
     Compute temporal debt score based on features
     
@@ -368,27 +415,8 @@ def compute_temporal_debt(features: TemporalFeatures, baseline_mean: float = 0.5
     
     Higher score = more debt = more likely hallucination
     """
-    # Belief change indicators
-    belief_change = (
-        features.max_confidence_slope * 0.3 +
-        features.confidence_acceleration * 0.2 +
-        (1.0 - features.tokens_to_high_conf / 20.0) * 0.2  # Normalize, faster = more debt
-    )
-    
-    # Evidence accumulation indicators (inversely related to debt)
-    evidence = (
-        features.entropy_variance * 0.1 +  # Low variance = steady accumulation
-        features.perturbation_sensitivity * 0.2  # High sensitivity = uncertain
-    )
-    
-    # Phase violations add debt
-    phase_penalty = 0.0
-    if features.answer_surfaced_early:
-        phase_penalty += 0.2
-    if features.entropy_recovery_detected:
-        phase_penalty += 0.1
-    
-    debt = belief_change + evidence + phase_penalty
+    components = compute_temporal_debt_components(features, weights)
+    debt = components['raw_total']
     
     # Normalize to 0-1 range (approximately)
     return min(1.0, max(0.0, debt))

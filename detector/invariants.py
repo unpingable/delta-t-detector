@@ -5,7 +5,10 @@ Implementations of all four hallucination invariants
 
 import re
 import asyncio
-import aiohttp
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -71,11 +74,13 @@ class TemporalCoherenceTest:
         self,
         threshold: float = 0.5,
         tokens_to_conf_threshold: int = 8,
-        acceleration_threshold: float = 0.15
+        acceleration_threshold: float = 0.15,
+        zscore_threshold: float = 2.0
     ):
         self.threshold = threshold
         self.tokens_to_conf_threshold = tokens_to_conf_threshold
         self.acceleration_threshold = acceleration_threshold
+        self.zscore_threshold = zscore_threshold
     
     def test(
         self,
@@ -115,6 +120,19 @@ class TemporalCoherenceTest:
         # Check for early answer surfacing
         if feat.get('answer_surfaced_early', False):
             violations.append("Answer surfaced before reasoning phase")
+
+        # Baseline anomaly checks (z-scores)
+        if baseline_normalized:
+            for key, label in [
+                ('tokens_to_high_conf_zscore', 'tokens_to_high_conf'),
+                ('max_confidence_slope_zscore', 'max_confidence_slope'),
+                ('confidence_acceleration_zscore', 'confidence_acceleration')
+            ]:
+                z = baseline_normalized.get(key)
+                if isinstance(z, (int, float)) and abs(z) > self.zscore_threshold:
+                    violations.append(
+                        f"{label} anomalous vs baseline (z={z:.2f})"
+                    )
         
         # Compute score (higher = more coherent = good)
         # Normalize tokens_to_conf (more tokens = better)
@@ -295,10 +313,10 @@ class EpistemicGroundingTest:
         timeout: int = 5
     ):
         self.max_fabricated = max_fabricated
-        self.validate_urls = validate_urls
+        self.validate_urls_enabled = validate_urls
         self.timeout = timeout
     
-    async def _validate_url_async(self, url: str, session: aiohttp.ClientSession) -> Tuple[str, bool, str]:
+    async def _validate_url_async(self, url: str, session: Any) -> Tuple[str, bool, str]:
         """Validate a single URL asynchronously"""
         try:
             async with session.head(
@@ -336,6 +354,8 @@ class EpistemicGroundingTest:
         """Validate URLs (synchronous wrapper)"""
         if not urls:
             return {}
+        if aiohttp is None:
+            raise ImportError("aiohttp not installed; URL validation unavailable")
         
         try:
             loop = asyncio.get_event_loop()
@@ -387,7 +407,7 @@ class EpistemicGroundingTest:
         invalid_count = 0
         validation_results = {}
         
-        if validate and self.validate_urls:
+        if validate and self.validate_urls_enabled:
             # Validate URLs
             if citations['urls']:
                 url_results = self.validate_urls(citations['urls'])

@@ -35,12 +35,17 @@ Usage:
 __version__ = "2.0.0"
 __author__ = "Δt Research"
 
-from .core import (
-    DeltaTDetector,
-    DetectionResult,
-    quick_detect,
-    batch_detect
-)
+_has_core = True
+try:
+    from .core import (
+        DeltaTDetector,
+        DetectionResult,
+        quick_detect,
+        batch_detect
+    )
+except Exception:
+    # Optional: core depends on torch, which may not be installed
+    _has_core = False
 
 from .config import (
     DetectorConfig,
@@ -78,7 +83,10 @@ from .reporting import (
     ReportGenerator,
     format_console_report,
     format_json_report,
-    format_markdown_report
+    format_markdown_report,
+    build_signal,
+    format_signal_json,
+    SIGNAL_SCHEMA_VERSION
 )
 
 # Optional API providers (may not be installed)
@@ -96,12 +104,6 @@ except ImportError:
     _has_api_providers = False
 
 __all__ = [
-    # Core
-    'DeltaTDetector',
-    'DetectionResult',
-    'quick_detect',
-    'batch_detect',
-    
     # Config
     'DetectorConfig',
     'RiskProfile',
@@ -135,6 +137,9 @@ __all__ = [
     'format_console_report',
     'format_json_report',
     'format_markdown_report',
+    'build_signal',
+    'format_signal_json',
+    'SIGNAL_SCHEMA_VERSION',
     
     # API Providers (if available)
     'OpenAIProvider',
@@ -144,3 +149,12 @@ __all__ = [
     'detect_with_api',
     'APIDetectionResult',
 ]
+
+if _has_core:
+    __all__ = [
+        'DeltaTDetector',
+        'DetectionResult',
+        'quick_detect',
+        'batch_detect',
+        *(__all__)
+    ]

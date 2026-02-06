@@ -72,6 +72,7 @@ class ModelBaseline:
         for name, value in feature_dict.items():
             if name in self.feature_stats and isinstance(value, (int, float)):
                 stats = self.feature_stats[name]
+                normalized[name] = value
                 normalized[f"{name}_zscore"] = stats.z_score(value)
                 normalized[f"{name}_percentile"] = stats.percentile_score(value)
             elif isinstance(value, (int, float)):

@@ -8,11 +8,11 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
-from .features import TemporalFeatures
+from .features import TemporalFeatures, compute_temporal_debt_components
 from .invariants import MultiInvariantResult, InvariantResult
 from .baseline import ModelBaseline
-from .config import RiskProfile
-from .utils import to_plain
+from .config import RiskProfile, RISK_PROFILES
+from .utils import to_plain, compute_text_hash
 
 
 @dataclass
@@ -384,3 +384,72 @@ def format_markdown_report(report: DetectionReport) -> str:
             lines.append(f"- {rec}")
     
     return '\n'.join(lines)
+
+
+# ============================================================================
+# Signal Schema (Governor Integration)
+# ============================================================================
+
+SIGNAL_SCHEMA_VERSION = "1.0"
+SIGNAL_FIELDS = TemporalFeatures.feature_columns() + ['generation_length']
+
+
+def build_signal(report: DetectionReport) -> Dict[str, Any]:
+    """
+    Build a structured signal payload with a stable JSON contract.
+    """
+    invariants = {}
+    for name, result in report.invariant_results.items():
+        invariants[name] = {
+            'score': result.get('score'),
+            'violated': result.get('violated'),
+            'confidence': result.get('confidence', 1.0)
+        }
+    
+    signals = {k: report.temporal_features.get(k) for k in SIGNAL_FIELDS}
+    
+    generation_length = report.temporal_features.get('generation_length', 0) or 0
+    phase_size = generation_length // 3 if generation_length else 0
+    phase_counts = {
+        'early': phase_size,
+        'middle': phase_size,
+        'late': max(0, generation_length - 2 * phase_size)
+    }
+    
+    profile = RISK_PROFILES.get(report.risk_profile, RISK_PROFILES['general'])
+    features_obj = TemporalFeatures(**report.temporal_features)
+    components = compute_temporal_debt_components(
+        features_obj,
+        weights=profile.temporal_debt_weights
+    )
+    
+    return {
+        'schema_version': SIGNAL_SCHEMA_VERSION,
+        'prediction': report.prediction,
+        'confidence': report.confidence,
+        'temporal_debt': report.temporal_debt_score,
+        'temporal_debt_components': {
+            'belief_change': components['belief_change'],
+            'evidence': components['evidence'],
+            'phase_penalty': components['phase_penalty']
+        },
+        'temporal_debt_weights': profile.temporal_debt_weights,
+        'risk_profile': report.risk_profile,
+        'model_baseline': report.model_baseline,
+        'anomaly_score': report.anomaly_score,
+        'invariants': invariants,
+        'signals': signals,
+        'provenance': {
+            'generation_hash': compute_text_hash(report.generation or ""),
+            'generation_length': generation_length,
+            'phase_token_counts': phase_counts,
+            'phase_transition_index': report.temporal_features.get('phase_transition_index'),
+            'entropy_trajectory_slope': report.temporal_features.get('entropy_trajectory_slope')
+        },
+        'timestamp': report.timestamp
+    }
+
+
+def format_signal_json(report: DetectionReport, indent: int = 2) -> str:
+    """Format structured signal payload as JSON"""
+    return json.dumps(build_signal(report), indent=indent, default=to_plain)

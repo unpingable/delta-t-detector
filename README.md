@@ -15,6 +15,11 @@ For all features:
 pip install -e ".[full]"
 ```
 
+Optional dependencies:
+- `torch` (required for local model runs)
+- `aiohttp` (required for URL validation in grounding checks)
+- `sentence-transformers` (semantic conservation embeddings)
+
 ## Quick Start
 
 ### Python
@@ -85,6 +90,26 @@ result = detector.detect_multi_invariant(
     test_semantic=True
 )
 ```
+
+## Structured Signal Schema
+
+For governor-style integration, a stable JSON signal payload is available:
+
+```python
+from detector.reporting import build_signal, format_signal_json
+
+result = detector.detect("What is the capital of France?")
+signal = build_signal(result.report)
+signal_json = format_signal_json(result.report)
+```
+
+The signal schema includes:
+- `schema_version`
+- `prediction`, `confidence`, `temporal_debt`
+- `temporal_debt_components` and `temporal_debt_weights`
+- `signals` (temporal feature vector)
+- `invariants` (per-invariant scores/violations)
+- `provenance` (generation hash, length, phase stats)
 
 ## Project Structure
 

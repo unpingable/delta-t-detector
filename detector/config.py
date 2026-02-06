@@ -27,6 +27,16 @@ class RiskProfile:
     temporal_threshold: float = 0.5
     confidence_acceleration_threshold: float = 0.15
     tokens_to_confidence_threshold: int = 8
+    baseline_zscore_threshold: float = 2.0
+    temporal_debt_weights: Dict[str, float] = field(default_factory=lambda: {
+        'max_confidence_slope': 0.3,
+        'confidence_acceleration': 0.2,
+        'tokens_to_high_conf': 0.2,
+        'entropy_variance': 0.1,
+        'perturbation_sensitivity': 0.2,
+        'answer_surfaced_early': 0.2,
+        'entropy_recovery_detected': 0.1
+    })
     
     # Semantic conservation
     semantic_similarity_threshold: float = 0.75

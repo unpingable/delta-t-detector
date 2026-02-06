@@ -33,7 +33,8 @@ from detector.invariants import (
     MultiInvariantValidator, InvariantResult
 )
 from detector.reporting import (
-    DetectionReport, ReportGenerator, format_console_report
+    DetectionReport, ReportGenerator, format_console_report,
+    build_signal, SIGNAL_SCHEMA_VERSION
 )
 
 
@@ -231,6 +232,28 @@ class TestFeatures:
         assert 0 <= debt <= 1.0
         assert debt > 0.5  # Should be high given these features
     
+    def test_compute_temporal_debt_weights(self):
+        """Custom weights should affect temporal debt"""
+        features = TemporalFeatures(
+            max_confidence_slope=0.8,
+            confidence_acceleration=0.3,
+            tokens_to_high_conf=3,
+            entropy_variance=0.1,
+            perturbation_sensitivity=0.5,
+            answer_surfaced_early=True
+        )
+        debt_default = compute_temporal_debt(features)
+        debt_custom = compute_temporal_debt(features, weights={
+            'max_confidence_slope': 0.0,
+            'confidence_acceleration': 0.0,
+            'tokens_to_high_conf': 0.0,
+            'entropy_variance': 0.0,
+            'perturbation_sensitivity': 0.0,
+            'answer_surfaced_early': 0.0,
+            'entropy_recovery_detected': 0.0
+        })
+        assert debt_custom <= debt_default
+    
     def test_feature_extractor_basic(self):
         """Test basic feature extraction"""
         extractor = FeatureExtractor()
@@ -332,6 +355,33 @@ class TestBaseline:
             
             assert baseline.n_calibration_samples == 20
             assert 'max_confidence_slope' in baseline.feature_stats
+    
+    def test_baseline_normalize_keeps_raw(self):
+        """Normalized features should keep raw values for thresholds"""
+        stats = FeatureStats(
+            mean=10.0,
+            std=2.0,
+            median=10.0,
+            p5=6.0,
+            p25=8.0,
+            p75=12.0,
+            p95=14.0,
+            min_val=5.0,
+            max_val=15.0,
+            n_samples=100
+        )
+        baseline = ModelBaseline(
+            model_name="test",
+            created_at="2024-01-01",
+            n_calibration_samples=100,
+            calibration_dataset="test",
+            feature_stats={'max_confidence_slope': stats},
+            metadata={}
+        )
+        features = TemporalFeatures(max_confidence_slope=12.0)
+        normalized = baseline.normalize_features(features)
+        assert 'max_confidence_slope' in normalized
+        assert 'max_confidence_slope_zscore' in normalized
 
 
 # ============================================================================
@@ -427,6 +477,12 @@ class TestInvariants:
         result = test.test(text, validate=False)
         
         assert result.details['total_citations'] > 0
+
+    def test_epistemic_grounding_validate_urls_callable(self):
+        """Validate URL checker is callable (no name collision)"""
+        test = EpistemicGroundingTest()
+        assert callable(test.validate_urls)
+        assert test.validate_urls_enabled is True
     
     def test_irreversibility_similar(self):
         """Test irreversibility with similar responses"""
@@ -440,6 +496,21 @@ class TestInvariants:
         result = test.test(responses)
         assert result.score == 1.0
         assert not result.violated
+
+    def test_temporal_coherence_baseline_anomaly(self):
+        """Baseline z-score anomalies should trigger violation"""
+        test = TemporalCoherenceTest(zscore_threshold=1.0)
+        features = {
+            'tokens_to_high_conf': 12,
+            'max_confidence_slope': 0.2,
+            'confidence_acceleration': 0.05,
+            'answer_surfaced_early': False
+        }
+        baseline_normalized = {
+            'tokens_to_high_conf_zscore': 1.5
+        }
+        result = test.test(features, baseline_normalized=baseline_normalized)
+        assert result.violated
     
     def test_multi_invariant_aggregation(self):
         """Test multi-invariant aggregation"""
@@ -561,6 +632,86 @@ class TestReporting:
         assert 'HALLUCINATION' in formatted
         assert 'medical' in formatted
         assert 'temporal_coherence' in formatted
+
+    def test_signal_schema_contract(self):
+        """Test structured signal schema contract"""
+        report = DetectionReport(
+            prediction='truthful',
+            confidence=0.9,
+            model_baseline='test-model',
+            risk_profile='general',
+            timestamp='2024-01-01T00:00:00',
+            invariant_results={
+                'temporal_coherence': {
+                    'score': 0.8,
+                    'violated': False,
+                    'confidence': 0.9
+                }
+            },
+            n_invariants_violated=0,
+            temporal_features={
+                'max_confidence_slope': 0.2,
+                'mean_confidence': 0.7,
+                'entropy_variance': 0.1,
+                'generation_length': 42,
+                'generation': 'hidden'
+            },
+            temporal_debt_score=0.1,
+            anomaly_score=None,
+            explanation='Test',
+            key_findings=[],
+            recommendations=[],
+            generation='output',
+            prompt='prompt'
+        )
+        
+        signal = build_signal(report)
+        assert signal['schema_version'] == SIGNAL_SCHEMA_VERSION
+        assert signal['prediction'] == 'truthful'
+        assert 'signals' in signal
+        assert signal['signals']['generation_length'] == 42
+        assert 'temporal_debt_components' in signal
+        assert 'temporal_debt_weights' in signal
+        assert 'provenance' in signal
+        assert signal['provenance']['generation_length'] == 42
+    
+    def test_signal_generation_hash_stable(self):
+        """Generation hash should be stable for identical generations"""
+        report = DetectionReport(
+            prediction='truthful',
+            confidence=0.9,
+            model_baseline='test-model',
+            risk_profile='general',
+            timestamp='2024-01-01T00:00:00',
+            invariant_results={},
+            n_invariants_violated=0,
+            temporal_features={
+                'generation_length': 5,
+                'generation': 'hello'
+            },
+            temporal_debt_score=0.1,
+            anomaly_score=None,
+            explanation='Test',
+            key_findings=[],
+            recommendations=[],
+            generation='hello',
+            prompt='prompt'
+        )
+        signal1 = build_signal(report)
+        signal2 = build_signal(report)
+        assert signal1['provenance']['generation_hash'] == signal2['provenance']['generation_hash']
+
+
+class TestFeatureSerialization:
+    """Tests for feature serialization"""
+    
+    def test_phase_transition_index_serialized(self):
+        """phase_transition_index should be serialized to dict"""
+        features = TemporalFeatures(
+            phase_transition_index=7
+        )
+        d = features.to_dict()
+        assert d['phase_transition_index'] == 7
 
 
 # ============================================================================

@@ -117,7 +117,8 @@ class DeltaTDetector:
         self.temporal_coherence_test = TemporalCoherenceTest(
             threshold=profile.temporal_threshold,
             tokens_to_conf_threshold=profile.tokens_to_confidence_threshold,
-            acceleration_threshold=profile.confidence_acceleration_threshold
+            acceleration_threshold=profile.confidence_acceleration_threshold,
+            zscore_threshold=profile.baseline_zscore_threshold
         )
         
         self.semantic_conservation_test = SemanticConservationTest(
@@ -356,6 +357,8 @@ class DeltaTDetector:
         Returns:
             GenerationTrace with tokens, logprobs, entropies
         """
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model not loaded. Initialize with load_model=True or call _load_model().")
         # Get actual model device (safer than assuming self.device)
         device = self._get_model_device()
         inputs = self.tokenizer(prompt, return_tensors="pt")
@@ -474,7 +477,7 @@ class DeltaTDetector:
             )
         
         # Compute temporal debt
-        debt = compute_temporal_debt(features)
+        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
         
         # Get threshold from profile
         profile = self.config.get_profile()
@@ -629,7 +632,7 @@ class DeltaTDetector:
         multi_result = self.multi_invariant_validator.aggregate(results)
         
         # Compute temporal debt
-        debt = compute_temporal_debt(features)
+        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
         
         # Generate report
         report = self.report_generator.generate(
