@@ -15,7 +15,8 @@ from .config import (
 )
 from .features import (
     FeatureExtractor, TemporalFeatures, GenerationTrace,
-    extract_features_from_raw, compute_temporal_debt
+    extract_features_from_raw, compute_temporal_debt,
+    compute_temporal_debt_components
 )
 from .baseline import (
     BaselineProfiler, ModelBaseline, 
@@ -40,7 +41,9 @@ warnings.filterwarnings('ignore', message='.*resume_download.*')  # HF deprecati
 @dataclass
 class DetectionResult:
     """Simple detection result container"""
-    prediction: str  # 'hallucination' or 'truthful'
+    prediction: str  # Single-invariant: 'temporal_stable'/'temporal_unstable';
+                     # Multi-invariant: 'hallucination'/'truthful';
+                     # Either: 'uncertain'/'unknown'
     confidence: float
     temporal_debt: float
     features: Dict[str, Any]
@@ -90,7 +93,11 @@ class DeltaTDetector:
         
         # Levenshtein function (lazy loaded)
         self._levenshtein_func = None
-        
+
+        # Sentence embedding model (lazy loaded)
+        self._embed_model = None
+        self._embed_func = None
+
         # Load model if requested
         if load_model:
             self._load_model()
@@ -109,6 +116,25 @@ class DeltaTDetector:
                     return int((1 - sim) * max(len(s1), len(s2)))
                 self._levenshtein_func = lev_dist
         return self._levenshtein_func
+
+    def _get_embed_func(self):
+        """Lazy load sentence-transformer embedding function.
+
+        Returns a callable (str -> np.ndarray) or None if unavailable.
+        """
+        if self._embed_func is not None:
+            return self._embed_func
+        try:
+            from sentence_transformers import SentenceTransformer
+            self._embed_model = SentenceTransformer(
+                'all-MiniLM-L6-v2', device=self.device or 'cpu'
+            )
+            self._embed_func = lambda text: self._embed_model.encode(
+                text, convert_to_numpy=True, show_progress_bar=False
+            )
+            return self._embed_func
+        except Exception:
+            return None
     
     def _init_invariant_testers(self) -> None:
         """Initialize invariant test classes based on current profile"""
@@ -441,7 +467,11 @@ class DeltaTDetector:
         if not traces:
             return None
         
-        return self.feature_extractor.extract(traces, self._get_levenshtein())
+        return self.feature_extractor.extract(
+            traces,
+            levenshtein_func=self._get_levenshtein(),
+            embed_func=self._get_embed_func(),
+        )
     
     # =========================================================================
     # Detection Methods
@@ -480,7 +510,7 @@ class DeltaTDetector:
         profile = self.config.get_profile()
 
         # Compute temporal debt
-        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
+        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights, baseline=self._current_baseline)
         
         # Normalize with baseline if available
         normalized = None
@@ -495,16 +525,16 @@ class DeltaTDetector:
             normalized
         )
         
-        # Decision
+        # Decision (single-invariant: temporal labels only)
         if tc_result.violated or debt > profile.temporal_threshold:
-            prediction = 'hallucination'
+            prediction = 'temporal_unstable'
             confidence = min(0.95, 0.5 + debt)
         else:
-            prediction = 'truthful'
+            prediction = 'temporal_stable'
             confidence = max(0.5, tc_result.score)
 
-        # Precision guards: cap confident truthfulness on low evidence or anomalies
-        if prediction == 'truthful' and debt > profile.temporal_debt_confidence_cap_threshold:
+        # Precision guards: cap confident stability on low evidence or anomalies
+        if prediction == 'temporal_stable' and debt > profile.temporal_debt_confidence_cap_threshold:
             confidence = min(confidence, profile.truthful_confidence_cap)
         
         if (features.entropy_variance < profile.low_evidence_entropy_threshold and
@@ -645,7 +675,7 @@ class DeltaTDetector:
         multi_result = self.multi_invariant_validator.aggregate(results)
         
         # Compute temporal debt
-        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
+        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights, baseline=self._current_baseline)
         
         # Precision guards: cap confident truthfulness on low evidence or anomalies
         prediction = multi_result.prediction

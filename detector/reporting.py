@@ -14,13 +14,22 @@ from .baseline import ModelBaseline
 from .config import RiskProfile, RISK_PROFILES
 from .utils import to_plain, compute_text_hash
 
+# Label classification helpers — handle both single-invariant
+# (temporal_stable/temporal_unstable) and multi-invariant (truthful/hallucination)
+_FLAGGED_LABELS = frozenset({'hallucination', 'temporal_unstable'})
+_CLEAN_LABELS = frozenset({'truthful', 'temporal_stable'})
+
+
+def _is_flagged(prediction: str) -> bool:
+    return prediction in _FLAGGED_LABELS
+
 
 @dataclass
 class DetectionReport:
     """Comprehensive detection report"""
     
     # Core prediction
-    prediction: str  # 'hallucination' or 'truthful'
+    prediction: str  # temporal_stable/temporal_unstable or hallucination/truthful
     confidence: float
     
     # Context
@@ -58,7 +67,7 @@ class DetectionReport:
     
     def summary(self) -> str:
         """Generate a brief summary"""
-        emoji = "⚠️" if self.prediction == 'hallucination' else "✓"
+        emoji = "⚠️" if _is_flagged(self.prediction) else "✓"
         return (
             f"{emoji} Prediction: {self.prediction.upper()} "
             f"(confidence: {self.confidence:.1%})\n"
@@ -92,7 +101,7 @@ class ReportGenerator:
         Generate a comprehensive detection report
         
         Args:
-            prediction: 'hallucination' or 'truthful'
+            prediction: detection label
             confidence: Prediction confidence
             features: Extracted temporal features
             invariant_result: Optional multi-invariant test results
@@ -154,7 +163,7 @@ class ReportGenerator:
         """Generate human-readable explanation"""
         key_findings = []
         
-        if prediction == 'hallucination':
+        if _is_flagged(prediction):
             # Identify primary issues
             if features.tokens_to_high_conf < 6:
                 key_findings.append(
@@ -229,7 +238,7 @@ class ReportGenerator:
         """Generate actionable recommendations"""
         recommendations = []
         
-        if prediction == 'hallucination':
+        if _is_flagged(prediction):
             # Universal recommendations for hallucinations
             recommendations.append("Request explicit sources or citations")
             recommendations.append("Cross-validate with retrieval-augmented system")
@@ -277,7 +286,7 @@ def format_console_report(report: DetectionReport) -> str:
     lines = []
     
     # Header
-    emoji = "🚨" if report.prediction == 'hallucination' else "✅"
+    emoji = "🚨" if _is_flagged(report.prediction) else "✅"
     lines.append(f"\n{'='*70}")
     lines.append(f"{emoji} DETECTION REPORT")
     lines.append(f"{'='*70}")
@@ -353,7 +362,7 @@ def format_markdown_report(report: DetectionReport) -> str:
     """Format report as Markdown"""
     lines = []
     
-    emoji = "🚨" if report.prediction == 'hallucination' else "✅"
+    emoji = "🚨" if _is_flagged(report.prediction) else "✅"
     
     lines.append(f"# {emoji} Hallucination Detection Report\n")
     lines.append(f"**Prediction:** {report.prediction.upper()}")

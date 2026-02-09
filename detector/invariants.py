@@ -107,19 +107,15 @@ class TemporalCoherenceTest:
         
         # Compute violation indicators
         violations = []
-        
-        if tokens_to_conf < self.tokens_to_conf_threshold:
+
+        if self.tokens_to_conf_threshold > 0 and tokens_to_conf < self.tokens_to_conf_threshold:
             violations.append(f"High confidence reached too quickly ({tokens_to_conf:.1f} tokens)")
-        
+
         if max_slope > self.threshold:
             violations.append(f"Confidence slope too steep ({max_slope:.3f})")
-        
+
         if acceleration > self.acceleration_threshold:
             violations.append(f"Confidence acceleration too high ({acceleration:.3f})")
-        
-        # Check for early answer surfacing
-        if feat.get('answer_surfaced_early', False):
-            violations.append("Answer surfaced before reasoning phase")
 
         # Baseline anomaly checks (z-scores)
         if baseline_normalized:
@@ -133,18 +129,19 @@ class TemporalCoherenceTest:
                     violations.append(
                         f"{label} anomalous vs baseline (z={z:.2f})"
                     )
-        
+
         # Compute score (higher = more coherent = good)
-        # Normalize tokens_to_conf (more tokens = better)
-        tokens_score = min(1.0, tokens_to_conf / 20.0)
-        
-        # Invert slope (lower slope = better)
+        # Slope score: lower slope is better
         slope_score = max(0.0, 1.0 - max_slope / 1.0)
-        
+
+        # Acceleration score: lower is better (normalize against threshold)
+        accel_norm = self.acceleration_threshold if self.acceleration_threshold > 0 else 0.5
+        accel_score = max(0.0, 1.0 - acceleration / (2.0 * accel_norm))
+
         # Combine scores
-        score = 0.5 * tokens_score + 0.3 * slope_score + 0.2 * (1.0 - acceleration / 0.5)
+        score = 0.6 * slope_score + 0.4 * accel_score
         score = max(0.0, min(1.0, score))
-        
+
         violated = len(violations) > 0
         
         return InvariantResult(

@@ -161,37 +161,43 @@ class FeatureExtractor:
     def extract(
         self,
         traces: List[GenerationTrace],
-        levenshtein_func: Optional[callable] = None
+        levenshtein_func: Optional[callable] = None,
+        embed_func: Optional[callable] = None,
     ) -> Optional[TemporalFeatures]:
         """
         Extract all temporal features from generation traces
-        
+
         Args:
             traces: List of GenerationTrace objects (from perturbation runs)
-            levenshtein_func: Optional Levenshtein distance function
-            
+            levenshtein_func: Optional Levenshtein distance function (fallback)
+            embed_func: Optional embedding function (str -> np.ndarray).
+                        When provided, perturbation_sensitivity uses
+                        1 - median_pairwise_cosine instead of Levenshtein.
+
         Returns:
             TemporalFeatures or None if extraction fails
         """
         if not traces or len(traces[0]) < 4:
             return None
-        
+
         primary = traces[0]
         features = TemporalFeatures()
-        
+
         # Core confidence features
         self._extract_confidence_features(primary, features)
-        
+
         # Phase-aware features
         self._extract_phase_features(primary, features)
-        
-        # Trajectory features  
+
+        # Trajectory features
         self._extract_trajectory_features(primary, features)
-        
+
         # Perturbation features (requires multiple traces)
         if len(traces) > 1:
-            self._extract_perturbation_features(traces, features, levenshtein_func)
-        
+            self._extract_perturbation_features(
+                traces, features, levenshtein_func, embed_func
+            )
+
         # Generation metadata
         features.generation = primary.text
         features.generation_length = len(primary)
@@ -339,21 +345,49 @@ class FeatureExtractor:
         self,
         traces: List[GenerationTrace],
         features: TemporalFeatures,
-        levenshtein_func: Optional[callable] = None
+        levenshtein_func: Optional[callable] = None,
+        embed_func: Optional[callable] = None,
     ) -> None:
-        """Extract perturbation sensitivity features"""
-        primary = traces[0]
-        secondary = traces[1]
-        
-        # Token Jaccard similarity
-        set0 = set(primary.tokens)
-        set1 = set(secondary.tokens)
-        features.token_jaccard = jaccard_similarity(set0, set1)
-        
-        # Levenshtein-based perturbation sensitivity
-        if levenshtein_func is not None:
-            text0 = primary.text
-            text1 = secondary.text
+        """Extract perturbation sensitivity features.
+
+        When embed_func is provided, perturbation_sensitivity is computed as
+        1 - median_pairwise_cosine across all trace embeddings.  This measures
+        *semantic* instability rather than surface-level text variation.
+
+        Falls back to Levenshtein distance when no embed_func is available.
+        """
+        # Token Jaccard: average pairwise across all traces
+        jaccard_scores = []
+        for i in range(len(traces)):
+            for j in range(i + 1, len(traces)):
+                si = set(traces[i].tokens)
+                sj = set(traces[j].tokens)
+                jaccard_scores.append(jaccard_similarity(si, sj))
+        if jaccard_scores:
+            features.token_jaccard = float(np.mean(jaccard_scores))
+
+        # Semantic stability via embedding cosine (preferred)
+        if embed_func is not None:
+            texts = [t.text for t in traces]
+            embeddings = [embed_func(t) for t in texts]
+            cosines = []
+            for i in range(len(embeddings)):
+                for j in range(i + 1, len(embeddings)):
+                    a, b = embeddings[i], embeddings[j]
+                    norm_a = np.linalg.norm(a)
+                    norm_b = np.linalg.norm(b)
+                    if norm_a > 0 and norm_b > 0:
+                        cosines.append(float(np.dot(a, b) / (norm_a * norm_b)))
+            if cosines:
+                features.perturbation_sensitivity = 1.0 - float(np.median(cosines))
+            else:
+                features.perturbation_sensitivity = 0.0
+            return
+
+        # Fallback: Levenshtein between first two traces
+        if levenshtein_func is not None and len(traces) >= 2:
+            text0 = traces[0].text
+            text1 = traces[1].text
             max_len = max(len(text0), len(text1))
             if max_len > 0:
                 dist = levenshtein_func(text0, text1)
@@ -394,12 +428,52 @@ def extract_features_from_raw(
     return extractor.extract(traces, levenshtein_func)
 
 
+def _sigmoid(x: float) -> float:
+    """Numerically stable sigmoid."""
+    if x >= 0:
+        return 1.0 / (1.0 + np.exp(-x))
+    else:
+        ex = np.exp(x)
+        return ex / (1.0 + ex)
+
+
+def _tokens_to_high_conf_penalty(
+    tokens_to_high_conf: float,
+    baseline_stats: Optional[Any] = None,
+) -> float:
+    """
+    Compute penalty for how quickly the model reaches high confidence.
+
+    Uses sigmoid((median_t - t) / k) so the penalty is relative to the
+    model's calibrated behavior rather than an absolute constant.
+
+    Without calibration, defaults to median=0, k=1 (conservative).
+    """
+    if baseline_stats is not None:
+        median_t = baseline_stats.median
+        iqr = baseline_stats.p75 - baseline_stats.p25
+        k = max(iqr, 1.0)  # floor at 1.0 to avoid division by zero
+    else:
+        # Default: assume model typically hits confidence quickly.
+        # sigmoid(0) = 0.5, a neutral penalty — honest about ignorance.
+        median_t = 0.0
+        k = 1.0
+
+    return _sigmoid((median_t - tokens_to_high_conf) / k)
+
+
 def compute_temporal_debt_components(
     features: TemporalFeatures,
-    weights: Optional[Dict[str, float]] = None
+    weights: Optional[Dict[str, float]] = None,
+    baseline: Optional[Any] = None,
 ) -> Dict[str, float]:
     """
     Compute temporal debt components for explainability and governance.
+
+    Args:
+        features: Extracted temporal features
+        weights: Per-component weights (from risk profile)
+        baseline: Optional ModelBaseline for calibrated normalization
     """
     if weights is None:
         weights = {
@@ -408,14 +482,23 @@ def compute_temporal_debt_components(
             'tokens_to_high_conf': 0.2,
             'entropy_variance': 0.1,
             'perturbation_sensitivity': 0.2,
-            'answer_surfaced_early': 0.2,
+            'answer_surfaced_early': 0.0,
             'entropy_recovery_detected': 0.1
         }
-    
+
+    # Get baseline stats for tokens_to_high_conf if available
+    tthc_stats = None
+    if baseline is not None and hasattr(baseline, 'feature_stats'):
+        tthc_stats = baseline.feature_stats.get('tokens_to_high_conf')
+
+    tthc_penalty = _tokens_to_high_conf_penalty(
+        features.tokens_to_high_conf, tthc_stats
+    )
+
     belief_change = (
         features.max_confidence_slope * weights.get('max_confidence_slope', 0.0) +
         features.confidence_acceleration * weights.get('confidence_acceleration', 0.0) +
-        (1.0 - features.tokens_to_high_conf / 20.0) * weights.get('tokens_to_high_conf', 0.0)
+        tthc_penalty * weights.get('tokens_to_high_conf', 0.0)
     )
     
     evidence = (
@@ -439,17 +522,18 @@ def compute_temporal_debt_components(
 
 def compute_temporal_debt(
     features: TemporalFeatures,
-    weights: Optional[Dict[str, float]] = None
+    weights: Optional[Dict[str, float]] = None,
+    baseline: Optional[Any] = None,
 ) -> float:
     """
     Compute temporal debt score based on features
-    
+
     Temporal debt = rate of belief change - rate of evidence accumulation
-    
+
     Higher score = more debt = more likely hallucination
     """
-    components = compute_temporal_debt_components(features, weights)
+    components = compute_temporal_debt_components(features, weights, baseline)
     debt = components['raw_total']
-    
+
     # Normalize to 0-1 range (approximately)
     return min(1.0, max(0.0, debt))

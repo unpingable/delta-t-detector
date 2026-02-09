@@ -158,7 +158,7 @@ class TestDetectEndToEnd:
     def test_valid_prediction(self, detector):
         """prediction should be one of the expected labels"""
         result = detector.detect("What is the capital of Japan?")
-        assert result.prediction in ('truthful', 'hallucination', 'uncertain', 'unknown')
+        assert result.prediction in ('temporal_stable', 'temporal_unstable', 'uncertain', 'unknown')
 
     def test_confidence_range(self, detector):
         """confidence should be in [0, 1]"""
@@ -186,7 +186,7 @@ class TestDetectEndToEnd:
         """All 5 eval seed prompts should complete without error"""
         for entry in eval_prompts:
             result = detector.detect(entry['prompt'])
-            assert result.prediction in ('truthful', 'hallucination', 'uncertain', 'unknown')
+            assert result.prediction in ('temporal_stable', 'temporal_unstable', 'uncertain', 'unknown')
 
 
 # ============================================================================
@@ -203,6 +203,7 @@ class TestDetectMultiInvariant:
             validate_citations=False,
             test_semantic=False,
         )
+        # multi-invariant uses hallucination/truthful vocabulary
         assert result.prediction in ('truthful', 'hallucination', 'uncertain', 'unknown')
         assert 0.0 <= result.confidence <= 1.0
 

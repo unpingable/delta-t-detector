@@ -14,7 +14,7 @@ Usage:
     # Basic detection
     detector = DeltaTDetector()
     result = detector.detect("What is the capital of France?")
-    print(result.prediction)  # 'truthful' or 'hallucination'
+    print(result.prediction)  # 'temporal_stable' or 'temporal_unstable'
     
     # With risk profile
     detector.set_risk_profile('medical')  # More conservative

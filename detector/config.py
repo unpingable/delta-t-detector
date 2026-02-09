@@ -41,7 +41,7 @@ class RiskProfile:
         'tokens_to_high_conf': 0.2,
         'entropy_variance': 0.1,
         'perturbation_sensitivity': 0.2,
-        'answer_surfaced_early': 0.2,
+        'answer_surfaced_early': 0.0,  # disabled: double-counts tokens_to_high_conf
         'entropy_recovery_detected': 0.1
     })
     
@@ -65,7 +65,7 @@ class RiskProfile:
     })
     
     # Feature extraction
-    n_perturbations: int = 2
+    n_perturbations: int = 4
     max_new_tokens: int = 100
     
     # Ensemble detection
@@ -148,13 +148,13 @@ RISK_PROFILES: Dict[str, RiskProfile] = {
     'general': RiskProfile(
         name='general',
         description='General Q&A - balanced approach',
-        temporal_threshold=0.5,
-        confidence_acceleration_threshold=0.18,
-        tokens_to_confidence_threshold=6,
+        temporal_threshold=0.35,
+        confidence_acceleration_threshold=0.45,
+        tokens_to_confidence_threshold=0,
         truthful_confidence_cap=0.6,
         temporal_debt_confidence_cap_threshold=0.15,
-        low_evidence_entropy_threshold=0.2,
-        low_evidence_tokens_threshold=8,
+        low_evidence_entropy_threshold=0.05,
+        low_evidence_tokens_threshold=0,
         low_evidence_confidence_cap=0.5,
         anomaly_score_uncertain_threshold=1.0,
         anomaly_confidence_cap=0.5,

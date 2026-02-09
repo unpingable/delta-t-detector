@@ -225,14 +225,13 @@ class TestFeatures:
         assert 'generation' not in cols  # Not a numeric feature
     
     def test_compute_temporal_debt(self):
-        """Test temporal debt computation"""
+        """Test temporal debt computation with pathological features"""
         features = TemporalFeatures(
             max_confidence_slope=0.8,
-            confidence_acceleration=0.3,
-            tokens_to_high_conf=3,
-            entropy_variance=0.1,
-            perturbation_sensitivity=0.5,
-            answer_surfaced_early=True
+            confidence_acceleration=0.5,
+            tokens_to_high_conf=0,
+            entropy_variance=0.5,
+            perturbation_sensitivity=0.8,
         )
         debt = compute_temporal_debt(features)
         assert 0 <= debt <= 1.0
@@ -793,9 +792,28 @@ class TestEvalHarness:
             anomaly_score=2.0,
             prediction='truthful'
         )
-        assert flags['low_evidence'] is True
+        # low_evidence requires both entropy_variance and tokens_to_high_conf
+        # below profile thresholds; general profile thresholds are calibrated
+        # to avoid triggering on normal model behavior.
         assert flags['anomaly'] is True
         assert flags['debt_cap'] is True
+
+    def test_compute_guard_flags_medical(self):
+        """Medical profile has stricter low_evidence thresholds"""
+        profile = RISK_PROFILES['medical']
+        features = {
+            'entropy_variance': 0.1,
+            'tokens_to_high_conf': 3
+        }
+        flags = compute_guard_flags(
+            features,
+            profile,
+            temporal_debt=0.2,
+            anomaly_score=2.0,
+            prediction='truthful'
+        )
+        assert flags['low_evidence'] is True
+        assert flags['anomaly'] is True
 
 
 class TestEvalDiff:
@@ -1014,7 +1032,7 @@ class TestIntegration:
         from detector.invariants import MultiInvariantResult
         
         report = generator.generate(
-            prediction='truthful' if not tc_result.violated else 'hallucination',
+            prediction='temporal_stable' if not tc_result.violated else 'temporal_unstable',
             confidence=tc_result.score,
             features=features,
             invariant_result=MultiInvariantResult(
@@ -1028,7 +1046,7 @@ class TestIntegration:
         )
         
         assert report is not None
-        assert report.prediction in ['truthful', 'hallucination']
+        assert report.prediction in ['temporal_stable', 'temporal_unstable']
 
 
 # ============================================================================
