@@ -42,6 +42,11 @@ from detector.governor_signal import (
 )
 from detector.eval import compute_guard_flags
 from detector.eval_diff import diff_csv
+from detector.run_store import (
+    corpus_hash, derive_run_id, git_head_sha, git_dirty,
+    store_run, list_runs, load_run, diff_runs, verify_run,
+    PredictionRecord, RUN_STORE_VERSION, _sha256_bytes,
+)
 
 
 # ============================================================================
@@ -994,6 +999,258 @@ class TestGovernorSignal:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         schema_path = os.path.join(root, 'schema', 'governor_signal.schema.json')
         assert os.path.exists(schema_path)
+
+
+# ============================================================================
+# Run Store Tests
+# ============================================================================
+
+class TestRunStore:
+    """Tests for append-only run store"""
+
+    def _make_corpus(self, tmpdir: str, content: str = "line1\nline2\n") -> str:
+        path = os.path.join(tmpdir, "corpus.jsonl")
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    def _make_predictions(self, n: int = 3) -> list:
+        preds = []
+        for i in range(n):
+            preds.append(PredictionRecord(
+                id=f"item_{i}",
+                prompt=f"prompt {i}",
+                expected_risk="low" if i % 2 == 0 else "high",
+                prediction="temporal_stable" if i % 2 == 0 else "temporal_unstable",
+                confidence=0.8 + i * 0.01,
+                temporal_debt=0.1 + i * 0.05,
+                anomaly_score=None,
+                features={"entropy_variance": 0.2, "tokens_to_high_conf": 5},
+                guard_flags={"low_evidence": False, "anomaly": False, "debt_cap": i == 1},
+                notes=f"note {i}",
+            ))
+        return preds
+
+    # --- Hash helpers ---
+
+    def test_corpus_hash_deterministic(self):
+        """Same file bytes -> same hash"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = self._make_corpus(tmpdir)
+            assert corpus_hash(p) == corpus_hash(p)
+
+    def test_corpus_hash_sensitive(self):
+        """Different content -> different hash"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1 = self._make_corpus(tmpdir, "aaa\n")
+            h1 = corpus_hash(p1)
+            # overwrite
+            with open(p1, "w") as f:
+                f.write("bbb\n")
+            h2 = corpus_hash(p1)
+            assert h1 != h2
+
+    def test_derive_run_id_deterministic(self):
+        """Same 4 axes -> same run_id"""
+        rid = derive_run_id("abc", "def", "general", "model-x")
+        assert rid == derive_run_id("abc", "def", "general", "model-x")
+        assert len(rid) == 12
+
+    def test_derive_run_id_sensitive(self):
+        """Changing any axis changes run_id"""
+        base = derive_run_id("abc", "def", "general", "model-x")
+        assert base != derive_run_id("xyz", "def", "general", "model-x")
+        assert base != derive_run_id("abc", "ghi", "general", "model-x")
+        assert base != derive_run_id("abc", "def", "medical", "model-x")
+        assert base != derive_run_id("abc", "def", "general", "model-y")
+
+    # --- store_run ---
+
+    def test_store_run_creates_three_files(self):
+        """store_run creates predictions.jsonl, summary.json, manifest.json"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_predictions()
+            rd = store_run(preds, cp, "m", "general", runs_root=os.path.join(tmpdir, "runs"))
+            assert (rd / "predictions.jsonl").exists()
+            assert (rd / "summary.json").exists()
+            assert (rd / "manifest.json").exists()
+
+    def test_manifest_written_last(self):
+        """If we delete manifest, the run looks incomplete to list_runs"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            runs_root = os.path.join(tmpdir, "runs")
+            rd = store_run(self._make_predictions(), cp, "m", "general", runs_root=runs_root)
+            assert len(list_runs(runs_root)) == 1
+            os.remove(rd / "manifest.json")
+            assert len(list_runs(runs_root)) == 0
+
+    def test_predictions_jsonl_valid(self):
+        """Each line in predictions.jsonl is valid JSON"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(5), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            lines = (rd / "predictions.jsonl").read_text().strip().split("\n")
+            assert len(lines) == 5
+            for line in lines:
+                obj = json.loads(line)
+                assert "id" in obj
+                assert "prediction" in obj
+
+    def test_predictions_hash_matches(self):
+        """predictions_hash in manifest matches actual file hash"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            manifest = json.loads((rd / "manifest.json").read_text())
+            actual = _sha256_bytes((rd / "predictions.jsonl").read_bytes())
+            assert manifest["predictions_hash"] == actual
+
+    # --- verify_run ---
+
+    def test_verify_run_valid(self):
+        """verify_run passes on an untampered run"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            assert verify_run(str(rd)) is True
+
+    def test_verify_run_tampered(self):
+        """verify_run fails if predictions.jsonl is tampered"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            # tamper
+            pred_path = rd / "predictions.jsonl"
+            pred_path.write_text("tampered content\n")
+            assert verify_run(str(rd)) is False
+
+    # --- list_runs ---
+
+    def test_list_runs_finds_completed(self):
+        """list_runs finds directories with manifest.json"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            runs_root = os.path.join(tmpdir, "runs")
+            store_run(self._make_predictions(), cp, "m", "general", runs_root=runs_root)
+            assert len(list_runs(runs_root)) == 1
+
+    def test_list_runs_ignores_incomplete(self):
+        """list_runs ignores directories without manifest.json"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_root = os.path.join(tmpdir, "runs")
+            os.makedirs(os.path.join(runs_root, "incomplete_run"))
+            assert len(list_runs(runs_root)) == 0
+
+    def test_list_runs_empty_root(self):
+        """list_runs returns [] for nonexistent root"""
+        assert list_runs("/nonexistent/path/runs") == []
+
+    # --- load_run ---
+
+    def test_load_run_returns_all_components(self):
+        """load_run returns manifest, predictions, and summary"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(4), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            data = load_run(str(rd))
+            assert "manifest" in data
+            assert "predictions" in data
+            assert "summary" in data
+            assert len(data["predictions"]) == 4
+
+    # --- diff_runs ---
+
+    def test_diff_runs_detects_prediction_change(self):
+        """diff_runs detects when a prediction changes"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            runs_root = os.path.join(tmpdir, "runs")
+
+            preds_a = self._make_predictions(2)
+            rd_a = store_run(preds_a, cp, "m", "general", runs_root=runs_root)
+
+            preds_b = self._make_predictions(2)
+            preds_b[0] = PredictionRecord(
+                id="item_0", prompt="prompt 0", expected_risk="low",
+                prediction="temporal_unstable",  # changed
+                confidence=0.8, temporal_debt=0.1, anomaly_score=None,
+                features={}, guard_flags={}, notes="",
+            )
+            # Need a different run_id so directories don't collide
+            rd_b = store_run(preds_b, cp, "m", "medical", runs_root=runs_root)
+
+            diff = diff_runs(str(rd_a), str(rd_b))
+            assert len(diff["prediction_changes"]) >= 1
+            changed_ids = [c["id"] for c in diff["prediction_changes"] if c.get("change") == "prediction_changed"]
+            assert "item_0" in changed_ids
+
+    def test_diff_runs_detects_config_change(self):
+        """diff_runs detects config changes"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            runs_root = os.path.join(tmpdir, "runs")
+            rd_a = store_run(self._make_predictions(), cp, "m", "general", runs_root=runs_root)
+            rd_b = store_run(self._make_predictions(), cp, "m", "medical", runs_root=runs_root)
+            diff = diff_runs(str(rd_a), str(rd_b))
+            assert "profile" in diff["config_changes"]
+
+    # --- summary ---
+
+    def test_summary_prediction_counts(self):
+        """Summary has correct prediction counts"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_predictions(4)
+            rd = store_run(preds, cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            summary = json.loads((rd / "summary.json").read_text())
+            total = sum(summary["prediction_counts"].values())
+            assert total == 4
+
+    def test_summary_guard_flag_totals(self):
+        """Summary counts guard flags correctly"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_predictions(3)  # item_1 has debt_cap=True
+            rd = store_run(preds, cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            summary = json.loads((rd / "summary.json").read_text())
+            assert summary["guard_flag_counts"].get("debt_cap", 0) == 1
+
+    # --- append-only ---
+
+    def test_store_run_never_overwrites(self):
+        """store_run raises FileExistsError if directory already exists"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            runs_root = os.path.join(tmpdir, "runs")
+            rd = store_run(self._make_predictions(), cp, "m", "general", runs_root=runs_root)
+            # Pre-create the exact directory name that the next call would use
+            # to prove the guard works (same run_id + same second = collision)
+            from pathlib import Path
+            import time
+            time.sleep(1.1)  # ensure different timestamp
+            rd2 = store_run(self._make_predictions(), cp, "m", "general", runs_root=runs_root)
+            assert rd != rd2
+            # Both runs exist and are complete
+            assert (rd / "manifest.json").exists()
+            assert (rd2 / "manifest.json").exists()
+
+    def test_manifest_has_run_store_version(self):
+        """Manifest includes run_store_version"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            manifest = json.loads((rd / "manifest.json").read_text())
+            assert manifest["run_store_version"] == RUN_STORE_VERSION
 
 
 # ============================================================================

@@ -95,6 +95,18 @@ from .governor_signal import (
     GOVERNOR_SIGNAL_VERSION
 )
 
+from .run_store import (
+    store_run,
+    list_runs,
+    load_run,
+    diff_runs,
+    verify_run,
+    RunManifest,
+    PredictionRecord,
+    RunSummary,
+    RUN_STORE_VERSION
+)
+
 # Optional API providers (may not be installed)
 try:
     from .api_providers import (
@@ -151,7 +163,18 @@ __all__ = [
     'build_governor_signal',
     'write_governor_signal',
     'GOVERNOR_SIGNAL_VERSION',
-    
+
+    # Run Store
+    'store_run',
+    'list_runs',
+    'load_run',
+    'diff_runs',
+    'verify_run',
+    'RunManifest',
+    'PredictionRecord',
+    'RunSummary',
+    'RUN_STORE_VERSION',
+
     # API Providers (if available)
     'OpenAIProvider',
     'AnthropicProvider', 

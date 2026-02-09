@@ -26,4 +26,5 @@ venv/
 
 # Project
 baselines/
+runs/
 *.tar.gz

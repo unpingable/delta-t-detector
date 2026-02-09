@@ -7,7 +7,8 @@ import csv
 import json
 import sys
 from dataclasses import dataclass
-from typing import Dict, Any, Iterable, Optional
+from pathlib import Path
+from typing import Dict, Any, Iterable, List, Optional
 
 from .config import DetectorConfig, RISK_PROFILES, RiskProfile
 
@@ -61,8 +62,9 @@ def run_eval(
     profile_name: str,
     device: str = "auto",
     baseline: bool = False,
-    output_csv: Optional[str] = None
-) -> None:
+    output_csv: Optional[str] = None,
+    store: bool = False,
+) -> Optional[Path]:
     from .core import DeltaTDetector
     config = DetectorConfig()
     config.device = device
@@ -94,15 +96,22 @@ def run_eval(
         "notes"
     ]
     
+    started_at: Optional[str] = None
+    if store:
+        from .run_store import PredictionRecord, store_run, _utcnow_iso
+        started_at = _utcnow_iso()
+
+    prediction_records: List["PredictionRecord"] = [] if store else []  # type: ignore[name-defined]
+
     out_f = open(output_csv, "w", newline="") if output_csv else None
     writer = csv.DictWriter(out_f if out_f is not None else sys.stdout, fieldnames=fieldnames)
-    
+
     writer.writeheader()
-    
+
     for item in load_jsonl(jsonl_path):
         result = detector.detect(item.prompt, generate_report=False)
         features = result.features or {}
-        
+
         anomaly_score = None
         if detector._current_baseline is not None and features:
             try:
@@ -112,9 +121,9 @@ def run_eval(
                 anomaly_score = compute_anomaly_score(tf, detector._current_baseline)
             except Exception:
                 anomaly_score = None
-        
+
         flags = compute_guard_flags(features, profile, result.temporal_debt, anomaly_score, result.prediction)
-        
+
         row = {
             "id": item.id,
             "expected_risk": item.expected_risk,
@@ -134,6 +143,34 @@ def run_eval(
             "notes": item.notes
         }
         writer.writerow(row)
-    
+
+        if store:
+            prediction_records.append(PredictionRecord(
+                id=item.id,
+                prompt=item.prompt,
+                expected_risk=item.expected_risk,
+                prediction=result.prediction,
+                confidence=result.confidence,
+                temporal_debt=result.temporal_debt,
+                anomaly_score=anomaly_score,
+                features=features,
+                guard_flags=flags,
+                notes=item.notes,
+            ))
+
     if out_f:
         out_f.close()
+
+    if store:
+        run_dir = store_run(
+            predictions=prediction_records,
+            corpus_path=jsonl_path,
+            model=model,
+            profile=profile_name,
+            device=device,
+            baseline_used=baseline,
+            started_at=started_at,
+        )
+        return run_dir
+
+    return None

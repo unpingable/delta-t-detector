@@ -138,14 +138,17 @@ def run_experiment(args):
 def run_eval(args):
     """Run evaluation harness on a JSONL corpus"""
     from detector.eval import run_eval
-    run_eval(
+    run_dir = run_eval(
         jsonl_path=args.file,
         model=args.model,
         profile_name=args.profile,
         device=args.device,
         baseline=args.baseline,
-        output_csv=args.output
+        output_csv=args.output,
+        store=args.store,
     )
+    if run_dir is not None:
+        print(f"Run stored: {run_dir}", file=sys.stderr)
 
 
 def run_eval_diff(args):
@@ -157,6 +160,94 @@ def run_eval_diff(args):
         output_csv=args.output,
         confidence_delta=args.conf_delta
     )
+
+
+def run_runs(args):
+    """Manage stored eval runs"""
+    from detector.run_store import list_runs, load_run, diff_runs, verify_run
+
+    action = args.runs_action
+
+    if action == "list":
+        manifests = list_runs()
+        if not manifests:
+            print("No runs found.")
+            return
+        print(f"{'RUN ID':<14} {'FINISHED':<22} {'MODEL':<30} {'PROFILE':<12} {'SIZE':>5}")
+        print("-" * 85)
+        for m in manifests:
+            print(
+                f"{m['run_id']:<14} "
+                f"{m['finished_at']:<22} "
+                f"{m['model']:<30} "
+                f"{m['profile']:<12} "
+                f"{m['corpus_size']:>5}"
+            )
+
+    elif action == "show":
+        run_dir = _resolve_run_dir(args.run_id)
+        if run_dir is None:
+            print(f"No run matching '{args.run_id}' found.", file=sys.stderr)
+            sys.exit(1)
+        data = load_run(run_dir)
+        import json
+        print("=== Manifest ===")
+        print(json.dumps(data["manifest"], indent=2))
+        print("\n=== Summary ===")
+        print(json.dumps(data["summary"], indent=2))
+
+    elif action == "diff":
+        dir_a = _resolve_run_dir(args.run_a)
+        dir_b = _resolve_run_dir(args.run_b)
+        if dir_a is None:
+            print(f"No run matching '{args.run_a}' found.", file=sys.stderr)
+            sys.exit(1)
+        if dir_b is None:
+            print(f"No run matching '{args.run_b}' found.", file=sys.stderr)
+            sys.exit(1)
+        import json
+        result = diff_runs(dir_a, dir_b)
+        print(json.dumps(result, indent=2))
+
+    elif action == "verify":
+        if args.all:
+            manifests = list_runs()
+            if not manifests:
+                print("No runs found.")
+                return
+            ok = 0
+            fail = 0
+            for m in manifests:
+                rd = _resolve_run_dir(m["run_id"])
+                if rd and verify_run(rd):
+                    ok += 1
+                else:
+                    print(f"FAIL: {m['run_id']}")
+                    fail += 1
+            print(f"{ok} passed, {fail} failed")
+        else:
+            run_dir = _resolve_run_dir(args.run_id)
+            if run_dir is None:
+                print(f"No run matching '{args.run_id}' found.", file=sys.stderr)
+                sys.exit(1)
+            if verify_run(run_dir):
+                print(f"OK: {args.run_id}")
+            else:
+                print(f"FAIL: {args.run_id}")
+                sys.exit(1)
+
+
+def _resolve_run_dir(prefix: str, runs_root: str = "runs") -> "str | None":
+    """Find a run directory by run_id prefix match."""
+    from pathlib import Path
+    root = Path(runs_root)
+    if not root.is_dir():
+        return None
+    for entry in sorted(root.iterdir()):
+        if entry.is_dir() and entry.name.startswith(prefix):
+            if (entry / "manifest.json").exists():
+                return str(entry)
+    return None
 
 
 def show_device_info(args):
@@ -306,6 +397,8 @@ Examples:
                              help='Use baseline normalization if available')
     eval_parser.add_argument('--output', type=str, default=None,
                              help='Write CSV output to file (default: stdout)')
+    eval_parser.add_argument('--store', action='store_true',
+                             help='Store run bundle under runs/')
 
     # Eval diff command
     diff_parser = subparsers.add_parser('eval-diff', help='Diff two eval CSV runs')
@@ -317,7 +410,27 @@ Examples:
     
     # Devices command
     devices_parser = subparsers.add_parser('devices', help='Show available compute devices')
-    
+
+    # Runs command
+    runs_parser = subparsers.add_parser('runs', help='Manage stored eval runs')
+    runs_sub = runs_parser.add_subparsers(dest='runs_action', help='Runs sub-action')
+    runs_sub.required = True
+
+    runs_list_parser = runs_sub.add_parser('list', help='List all stored runs')
+
+    runs_show_parser = runs_sub.add_parser('show', help='Show manifest + summary for a run')
+    runs_show_parser.add_argument('run_id', type=str, help='Run ID (prefix match)')
+
+    runs_diff_parser = runs_sub.add_parser('diff', help='Diff two runs')
+    runs_diff_parser.add_argument('run_a', type=str, help='First run ID (prefix match)')
+    runs_diff_parser.add_argument('run_b', type=str, help='Second run ID (prefix match)')
+
+    runs_verify_parser = runs_sub.add_parser('verify', help='Verify run integrity')
+    runs_verify_parser.add_argument('run_id', type=str, nargs='?', default=None,
+                                     help='Run ID (prefix match)')
+    runs_verify_parser.add_argument('--all', action='store_true',
+                                     help='Verify all runs')
+
     args = parser.parse_args()
     
     if args.command == 'detect':
@@ -332,6 +445,8 @@ Examples:
         run_eval_diff(args)
     elif args.command == 'devices':
         show_device_info(args)
+    elif args.command == 'runs':
+        run_runs(args)
     else:
         parser.print_help()
 
