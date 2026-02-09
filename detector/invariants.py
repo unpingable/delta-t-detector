@@ -45,7 +45,7 @@ class MultiInvariantResult:
     results: Dict[str, InvariantResult]
     n_violated: int
     aggregate_score: float
-    prediction: str  # 'hallucination' or 'truthful'
+    prediction: str  # 'FAIL', 'WARN', or 'CLEAN'
     confidence: float
     
     def to_dict(self) -> Dict[str, Any]:
@@ -590,15 +590,15 @@ class MultiInvariantValidator:
         
         aggregate_score = weighted_sum / total_weight if total_weight > 0 else 0.5
         
-        # Decision rule
+        # Decision rule: FAIL / WARN / CLEAN
         if n_violated >= self.min_invariants_required:
-            prediction = 'hallucination'
+            prediction = 'FAIL'
             confidence = min(0.95, 0.5 + 0.15 * n_violated)
-        elif aggregate_score < 0.5:
-            prediction = 'hallucination'
-            confidence = 1.0 - aggregate_score
+        elif n_violated > 0:
+            prediction = 'WARN'
+            confidence = min(0.85, 0.5 + 0.1 * n_violated)
         else:
-            prediction = 'truthful'
+            prediction = 'CLEAN'
             confidence = aggregate_score
         
         return MultiInvariantResult(

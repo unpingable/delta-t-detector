@@ -173,9 +173,9 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
                 if score is not None:
                     inv_scores.setdefault(inv_name, []).append(score)
 
-    # High-risk recall: of items expected high risk, how many predicted unstable/hallucination?
+    # High-risk recall: of items expected high risk, how many predicted unstable/FAIL?
     high_risk_labels = {"high", "hallucination", "temporal_unstable"}
-    unstable_preds = {"temporal_unstable", "hallucination", "high"}
+    unstable_preds = {"temporal_unstable", "hallucination", "FAIL", "high"}
     hr_total = sum(
         ct
         for exp, preds in confusion.items()
@@ -192,7 +192,7 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
     high_risk_recall = hr_correct / hr_total if hr_total > 0 else None
 
     # Low-risk precision: of items predicted stable, how many actually low risk?
-    stable_preds = {"temporal_stable", "truthful", "low"}
+    stable_preds = {"temporal_stable", "truthful", "CLEAN", "low"}
     low_risk_labels = {"low", "truthful", "temporal_stable"}
     lr_predicted = sum(
         ct

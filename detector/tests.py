@@ -586,7 +586,7 @@ class TestInvariants:
     def test_multi_invariant_aggregation(self):
         """Test multi-invariant aggregation"""
         validator = MultiInvariantValidator(min_invariants_required=2)
-        
+
         results = {
             'temporal_coherence': InvariantResult(
                 name='temporal_coherence',
@@ -607,10 +607,40 @@ class TestInvariants:
                 details={}
             )
         }
-        
+
         aggregated = validator.aggregate(results)
         assert aggregated.n_violated == 2
-        assert aggregated.prediction == 'hallucination'
+        assert aggregated.prediction == 'FAIL'
+
+    def test_multi_invariant_warn_tier(self):
+        """Test WARN tier: 1 violation < min_invariants_required"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'temporal_coherence': InvariantResult(
+                name='temporal_coherence', score=0.3, violated=True, details={}
+            ),
+            'semantic_conservation': InvariantResult(
+                name='semantic_conservation', score=0.8, violated=False, details={}
+            ),
+        }
+        aggregated = validator.aggregate(results)
+        assert aggregated.n_violated == 1
+        assert aggregated.prediction == 'WARN'
+
+    def test_multi_invariant_clean_tier(self):
+        """Test CLEAN tier: 0 violations"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'temporal_coherence': InvariantResult(
+                name='temporal_coherence', score=0.9, violated=False, details={}
+            ),
+            'semantic_conservation': InvariantResult(
+                name='semantic_conservation', score=0.8, violated=False, details={}
+            ),
+        }
+        aggregated = validator.aggregate(results)
+        assert aggregated.n_violated == 0
+        assert aggregated.prediction == 'CLEAN'
 
 
 # ============================================================================
@@ -671,7 +701,7 @@ class TestReporting:
     def test_format_console_report(self):
         """Test console report formatting"""
         report = DetectionReport(
-            prediction='hallucination',
+            prediction='FAIL',
             confidence=0.75,
             model_baseline=None,
             risk_profile='medical',
@@ -698,9 +728,9 @@ class TestReporting:
             generation='test',
             prompt='test'
         )
-        
+
         formatted = format_console_report(report)
-        assert 'HALLUCINATION' in formatted
+        assert 'FAIL' in formatted
         assert 'medical' in formatted
         assert 'temporal_coherence' in formatted
 
@@ -1261,7 +1291,7 @@ class TestRunStore:
                 id=f"item_{i}",
                 prompt=f"prompt {i}",
                 expected_risk="low" if i % 2 == 0 else "high",
-                prediction="truthful" if i % 2 == 0 else "hallucination",
+                prediction="CLEAN" if i % 2 == 0 else "FAIL",
                 confidence=0.8 + i * 0.01,
                 temporal_debt=0.1 + i * 0.05,
                 anomaly_score=None,

@@ -163,6 +163,22 @@ def run_eval_diff(args):
     )
 
 
+def run_replay(args):
+    """CPU-only threshold replay on a stored run"""
+    import subprocess
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          'scripts', 'replay.py')
+    cmd = [sys.executable, script, '--run', args.run,
+           '--accel-grid'] + [str(x) for x in args.accel_grid] + [
+           '--tokens-grid'] + [str(x) for x in args.tokens_grid] + [
+           '--slope-grid'] + [str(x) for x in args.slope_grid] + [
+           '--sc-threshold', str(args.sc_threshold),
+           '--min-violated'] + [str(x) for x in args.min_violated]
+    if args.output:
+        cmd += ['--output', args.output]
+    sys.exit(subprocess.call(cmd))
+
+
 def run_runs(args):
     """Manage stored eval runs"""
     from detector.run_store import list_runs, load_run, diff_runs, verify_run
@@ -411,6 +427,20 @@ Examples:
     diff_parser.add_argument('--conf-delta', type=float, default=0.1,
                              help='Minimum confidence delta to count as change')
     
+    # Replay command (CPU-only threshold scan)
+    replay_parser = subparsers.add_parser('replay', help='CPU-only threshold replay on stored run')
+    replay_parser.add_argument('--run', required=True, help='Run ID (prefix match)')
+    replay_parser.add_argument('--accel-grid', type=float, nargs='+',
+                               default=[0.25, 0.30, 0.35, 0.40, 0.45])
+    replay_parser.add_argument('--tokens-grid', type=int, nargs='+',
+                               default=[0, 2, 4, 6, 8])
+    replay_parser.add_argument('--slope-grid', type=float, nargs='+',
+                               default=[0.30, 0.35, 0.40])
+    replay_parser.add_argument('--sc-threshold', type=float, default=0.70)
+    replay_parser.add_argument('--min-violated', type=int, nargs='+', default=[1, 2])
+    replay_parser.add_argument('--output', type=str, default=None,
+                               help='Write results JSON to file')
+
     # Devices command
     devices_parser = subparsers.add_parser('devices', help='Show available compute devices')
 
@@ -448,6 +478,8 @@ Examples:
         run_eval_diff(args)
     elif args.command == 'devices':
         show_device_info(args)
+    elif args.command == 'replay':
+        run_replay(args)
     elif args.command == 'runs':
         run_runs(args)
     else:

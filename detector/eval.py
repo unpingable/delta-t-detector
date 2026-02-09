@@ -48,7 +48,7 @@ def compute_guard_flags(
         features.get("tokens_to_high_conf", 0.0) < profile.low_evidence_tokens_threshold
     )
     anomaly = anomaly_score is not None and anomaly_score > profile.anomaly_score_uncertain_threshold
-    debt_cap = prediction in ("truthful", "temporal_stable") and temporal_debt > profile.temporal_debt_confidence_cap_threshold
+    debt_cap = prediction in ("truthful", "temporal_stable", "CLEAN", "WARN") and temporal_debt > profile.temporal_debt_confidence_cap_threshold
     return {
         "low_evidence": low_evidence,
         "anomaly": anomaly,

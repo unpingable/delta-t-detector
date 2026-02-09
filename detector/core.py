@@ -42,7 +42,7 @@ warnings.filterwarnings('ignore', message='.*resume_download.*')  # HF deprecati
 class DetectionResult:
     """Simple detection result container"""
     prediction: str  # Single-invariant: 'temporal_stable'/'temporal_unstable';
-                     # Multi-invariant: 'hallucination'/'truthful';
+                     # Multi-invariant: 'FAIL'/'WARN'/'CLEAN';
                      # Either: 'uncertain'/'unknown'
     confidence: float
     temporal_debt: float
@@ -681,18 +681,18 @@ class DeltaTDetector:
         prediction = multi_result.prediction
         confidence = multi_result.confidence
         
-        if prediction == 'truthful' and debt > profile.temporal_debt_confidence_cap_threshold:
+        if prediction == 'CLEAN' and debt > profile.temporal_debt_confidence_cap_threshold:
             confidence = min(confidence, profile.truthful_confidence_cap)
-        
+
         if (features.entropy_variance < profile.low_evidence_entropy_threshold and
             features.tokens_to_high_conf < profile.low_evidence_tokens_threshold):
             prediction = 'uncertain'
             confidence = min(confidence, profile.low_evidence_confidence_cap)
-        
+
         if anomaly_score is not None and anomaly_score > profile.anomaly_score_uncertain_threshold:
             prediction = 'uncertain'
             confidence = min(confidence, profile.anomaly_confidence_cap)
-        
+
         # Generate report
         report = self.report_generator.generate(
             prediction=prediction,
@@ -705,7 +705,7 @@ class DeltaTDetector:
             anomaly_score=anomaly_score,
             prompt=prompt
         )
-        
+
         return DetectionResult(
             prediction=prediction,
             confidence=confidence,

@@ -15,9 +15,9 @@ from .config import RiskProfile, RISK_PROFILES
 from .utils import to_plain, compute_text_hash
 
 # Label classification helpers — handle both single-invariant
-# (temporal_stable/temporal_unstable) and multi-invariant (truthful/hallucination)
-_FLAGGED_LABELS = frozenset({'hallucination', 'temporal_unstable'})
-_CLEAN_LABELS = frozenset({'truthful', 'temporal_stable'})
+# (temporal_stable/temporal_unstable) and multi-invariant (FAIL/WARN/CLEAN)
+_FLAGGED_LABELS = frozenset({'hallucination', 'temporal_unstable', 'FAIL', 'WARN'})
+_CLEAN_LABELS = frozenset({'truthful', 'temporal_stable', 'CLEAN'})
 
 
 def _is_flagged(prediction: str) -> bool:
@@ -29,7 +29,7 @@ class DetectionReport:
     """Comprehensive detection report"""
     
     # Core prediction
-    prediction: str  # temporal_stable/temporal_unstable or hallucination/truthful
+    prediction: str  # temporal_stable/temporal_unstable or FAIL/WARN/CLEAN
     confidence: float
     
     # Context
