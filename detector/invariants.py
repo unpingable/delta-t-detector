@@ -299,10 +299,15 @@ class SemanticConservationTest:
 class EpistemicGroundingTest:
     """
     Tests epistemic grounding (Invariant 3)
-    
-    Validates citations and sources mentioned in responses
+
+    Validates citations and sources mentioned in responses via existence
+    checks: HEAD requests for URLs, doi.org for DOIs, rfc-editor.org
+    for RFCs, arxiv.org for arXiv IDs.  No semantic fetching — just
+    "does the cited anchor exist?"
     """
-    
+
+    _USER_AGENT = 'DeltaT-Detector/1.0'
+
     def __init__(
         self,
         max_fabricated: int = 0,
@@ -312,7 +317,24 @@ class EpistemicGroundingTest:
         self.max_fabricated = max_fabricated
         self.validate_urls_enabled = validate_urls
         self.timeout = timeout
-    
+
+    # ------------------------------------------------------------------
+    # URL validation (aiohttp fast-path, requests fallback)
+    # ------------------------------------------------------------------
+
+    def _head_requests(self, url: str) -> Tuple[bool, str]:
+        """Validate a single URL via requests (sync, HEAD only)."""
+        try:
+            import requests
+            resp = requests.head(
+                url, allow_redirects=True, timeout=self.timeout,
+                headers={'User-Agent': self._USER_AGENT},
+            )
+            valid = resp.status_code in (200, 301, 302, 403, 401, 405)
+            return valid, f"HTTP {resp.status_code}"
+        except Exception as e:
+            return False, str(e)[:80]
+
     async def _validate_url_async(self, url: str, session: Any) -> Tuple[str, bool, str]:
         """Validate a single URL asynchronously"""
         try:
@@ -321,53 +343,75 @@ class EpistemicGroundingTest:
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
                 allow_redirects=True
             ) as response:
-                # 200, 403 (paywall), 401 (auth required) all indicate URL exists
                 valid = response.status in [200, 301, 302, 403, 401, 405]
                 return url, valid, f"HTTP {response.status}"
         except asyncio.TimeoutError:
             return url, False, "timeout"
         except Exception as e:
             return url, False, str(e)[:50]
-    
+
     async def _validate_urls_async(self, urls: List[str]) -> Dict[str, Tuple[bool, str]]:
         """Validate multiple URLs concurrently"""
         results = {}
-        
         async with aiohttp.ClientSession(
-            headers={'User-Agent': 'DeltaT-Detector/1.0'}
+            headers={'User-Agent': self._USER_AGENT}
         ) as session:
             tasks = [self._validate_url_async(url, session) for url in urls]
             completed = await asyncio.gather(*tasks, return_exceptions=True)
-            
             for result in completed:
                 if isinstance(result, Exception):
                     continue
                 url, valid, reason = result
                 results[url] = (valid, reason)
-        
         return results
-    
+
     def validate_urls(self, urls: List[str]) -> Dict[str, Tuple[bool, str]]:
-        """Validate URLs (synchronous wrapper)"""
+        """Validate URLs — async if aiohttp available, sync fallback."""
         if not urls:
             return {}
-        if aiohttp is None:
-            raise ImportError("aiohttp not installed; URL validation unavailable")
-        
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        return loop.run_until_complete(self._validate_urls_async(urls))
-    
+
+        # Try aiohttp fast-path
+        if aiohttp is not None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self._validate_urls_async(urls))
+
+        # Fallback: synchronous requests
+        results = {}
+        for url in urls:
+            valid, reason = self._head_requests(url)
+            results[url] = (valid, reason)
+        return results
+
+    # ------------------------------------------------------------------
+    # Specific anchor validators
+    # ------------------------------------------------------------------
+
     def validate_doi(self, doi: str) -> Tuple[bool, str]:
         """Validate a DOI by checking doi.org"""
         url = f"https://doi.org/{doi}"
         results = self.validate_urls([url])
         return results.get(url, (False, "not checked"))
-    
+
+    def validate_rfc(self, rfc_number: str) -> Tuple[bool, str]:
+        """Validate an RFC by checking rfc-editor.org"""
+        url = f"https://www.rfc-editor.org/rfc/rfc{rfc_number}"
+        valid, reason = self._head_requests(url)
+        return valid, reason
+
+    def validate_arxiv(self, arxiv_id: str) -> Tuple[bool, str]:
+        """Validate an arXiv paper by checking arxiv.org"""
+        url = f"https://arxiv.org/abs/{arxiv_id}"
+        valid, reason = self._head_requests(url)
+        return valid, reason
+
+    # ------------------------------------------------------------------
+    # Main test
+    # ------------------------------------------------------------------
+
     def test(
         self,
         text: str,
@@ -375,23 +419,21 @@ class EpistemicGroundingTest:
     ) -> InvariantResult:
         """
         Test epistemic grounding of a response
-        
+
         Args:
             text: Response text to analyze
-            validate: Whether to actually validate URLs/DOIs
-            
+            validate: Whether to actually validate citations
+
         Returns:
             InvariantResult
         """
-        # Extract citations
         citations = extract_citations(text)
         total_citations = count_citations(citations)
-        
+
         if total_citations == 0:
-            # No citations to validate
             return InvariantResult(
                 name='epistemic_grounding',
-                score=0.5,  # Neutral - no claims made
+                score=0.5,
                 violated=False,
                 details={
                     'total_citations': 0,
@@ -399,13 +441,13 @@ class EpistemicGroundingTest:
                 },
                 confidence=0.5
             )
-        
+
         valid_count = 0
         invalid_count = 0
         validation_results = {}
-        
+
         if validate and self.validate_urls_enabled:
-            # Validate URLs
+            # URLs
             if citations['urls']:
                 url_results = self.validate_urls(citations['urls'])
                 for url, (valid, reason) in url_results.items():
@@ -414,8 +456,8 @@ class EpistemicGroundingTest:
                         valid_count += 1
                     else:
                         invalid_count += 1
-            
-            # Validate DOIs
+
+            # DOIs
             for doi in citations['dois']:
                 valid, reason = self.validate_doi(doi)
                 validation_results[f"doi:{doi}"] = {'valid': valid, 'reason': reason}
@@ -423,21 +465,38 @@ class EpistemicGroundingTest:
                     valid_count += 1
                 else:
                     invalid_count += 1
+
+            # RFCs
+            for rfc in citations.get('rfcs', []):
+                valid, reason = self.validate_rfc(rfc)
+                validation_results[f"rfc:{rfc}"] = {'valid': valid, 'reason': reason}
+                if valid:
+                    valid_count += 1
+                else:
+                    invalid_count += 1
+
+            # arXiv
+            for arxiv_id in citations.get('arxiv', []):
+                valid, reason = self.validate_arxiv(arxiv_id)
+                validation_results[f"arxiv:{arxiv_id}"] = {'valid': valid, 'reason': reason}
+                if valid:
+                    valid_count += 1
+                else:
+                    invalid_count += 1
         else:
-            # Assume valid if not validating
             valid_count = total_citations
-        
-        # Count unvalidated citations (arxiv, pmid, isbn - harder to validate)
-        unvalidated = len(citations['arxiv']) + len(citations['pmids']) + len(citations['isbns'])
-        
-        # Compute grounding score
+
+        # Remaining unvalidated (PMIDs, ISBNs — harder to check)
+        unvalidated = len(citations['pmids']) + len(citations['isbns'])
+
+        # Grounding score
         if valid_count + invalid_count > 0:
             grounding_score = valid_count / (valid_count + invalid_count)
         else:
             grounding_score = 1.0 if unvalidated == 0 else 0.5
-        
+
         violated = invalid_count > self.max_fabricated
-        
+
         return InvariantResult(
             name='epistemic_grounding',
             score=grounding_score,

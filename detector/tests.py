@@ -530,6 +530,14 @@ class TestInvariants:
         result = test.test(responses)
         assert result.score < 0.5  # Should show semantic drift
     
+    def test_extract_citations_rfc(self):
+        """Test RFC number extraction"""
+        text = "See RFC 9110 and RFC 7231 for HTTP semantics"
+        citations = extract_citations(text)
+        assert len(citations['rfcs']) == 2
+        assert '9110' in citations['rfcs']
+        assert '7231' in citations['rfcs']
+
     def test_epistemic_grounding_no_citations(self):
         """Test epistemic grounding with no citations"""
         test = EpistemicGroundingTest()

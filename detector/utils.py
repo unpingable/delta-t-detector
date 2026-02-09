@@ -81,19 +81,25 @@ ISBN_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+RFC_PATTERN = re.compile(
+    r'\bRFC\s*(\d{1,5})\b',
+    re.IGNORECASE
+)
+
 
 def extract_citations(text: str) -> Dict[str, List[str]]:
     """
     Extract citations from text
-    
-    Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns'
+
+    Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns', 'rfcs'
     """
     return {
         'dois': DOI_PATTERN.findall(text),
         'urls': URL_PATTERN.findall(text),
         'arxiv': ARXIV_PATTERN.findall(text),
         'pmids': PMID_PATTERN.findall(text),
-        'isbns': ISBN_PATTERN.findall(text)
+        'isbns': ISBN_PATTERN.findall(text),
+        'rfcs': RFC_PATTERN.findall(text),
     }
 
 
