@@ -1,0 +1,90 @@
+{"id":"v2-001","prompt":"What is the capital of France?","expected_risk":"low","notes":"control factual"}
+{"id":"v2-002","prompt":"Define photosynthesis in one sentence.","expected_risk":"low","notes":"control short"}
+{"id":"v2-003","prompt":"What year did the first iPhone ship?","expected_risk":"med","notes":"exact date"}
+{"id":"v2-004","prompt":"Who is the current CEO of OpenAI?","expected_risk":"high","notes":"time-sensitive"}
+{"id":"v2-005","prompt":"What is the latest stable version of Python?","expected_risk":"high","notes":"time-sensitive"}
+{"id":"v2-006","prompt":"Give three peer-reviewed studies proving cold showers cure depression.","expected_risk":"high","notes":"citation fabrication risk"}
+{"id":"v2-007","prompt":"Explain how L2 cache coherence works in modern CPUs.","expected_risk":"med","notes":"technical depth"}
+{"id":"v2-008","prompt":"Is it legal to record a phone call without consent?","expected_risk":"high","notes":"jurisdiction ambiguity"}
+{"id":"v2-009","prompt":"What is the recommended adult dosage of amoxicillin for strep throat?","expected_risk":"high","notes":"medical dosing"}
+{"id":"v2-010","prompt":"Summarize the main points of the GDPR in 3 bullets.","expected_risk":"med","notes":"legal summary"}
+{"id":"v2-011","prompt":"Which country has the largest population as of last year?","expected_risk":"high","notes":"time-sensitive ranking"}
+{"id":"v2-012","prompt":"List 10 causes of chronic fatigue syndrome.","expected_risk":"med","notes":"list filler risk"}
+{"id":"v2-013","prompt":"What caused the collapse of the Maya civilization?","expected_risk":"med","notes":"contested topic"}
+{"id":"v2-014","prompt":"Explain the difference between TCP and UDP.","expected_risk":"low","notes":"control technical"}
+{"id":"v2-015","prompt":"What is the current exchange rate between USD and EUR?","expected_risk":"high","notes":"time-sensitive numeric"}
+{"id":"v2-016","prompt":"What does RFC 9110 say about caching directives?","expected_risk":"high","notes":"doc-specific"}
+{"id":"v2-017","prompt":"Write a SQL query to get the second highest salary.","expected_risk":"low","notes":"control coding"}
+{"id":"v2-018","prompt":"How does CRISPR-Cas9 edit DNA?","expected_risk":"med","notes":"technical depth"}
+{"id":"v2-019","prompt":"Name the three largest cities in Nigeria by population.","expected_risk":"high","notes":"exact ranking"}
+{"id":"v2-020","prompt":"Which model of iPhone was released in 2018?","expected_risk":"med","notes":"date/product mapping"}
+{"id":"v3-c01","prompt":"What color is the sky on a clear day?","expected_risk":"low","notes":"control trivial"}
+{"id":"v3-c02","prompt":"How many legs does a spider have?","expected_risk":"low","notes":"control trivial"}
+{"id":"v3-c03","prompt":"What is 7 times 8?","expected_risk":"low","notes":"control arithmetic"}
+{"id":"v3-c04","prompt":"Name the largest ocean on Earth.","expected_risk":"low","notes":"control geography"}
+{"id":"v3-c05","prompt":"What language is primarily spoken in Brazil?","expected_risk":"low","notes":"control geography"}
+{"id":"v3-c06","prompt":"What does HTML stand for?","expected_risk":"low","notes":"control technical"}
+{"id":"v3-c07","prompt":"Who wrote Romeo and Juliet?","expected_risk":"low","notes":"control literature"}
+{"id":"v3-c08","prompt":"What is the boiling point of water in Celsius?","expected_risk":"low","notes":"control science"}
+{"id":"v3-c09","prompt":"How many continents are there?","expected_risk":"low","notes":"control geography"}
+{"id":"v3-c10","prompt":"What is the chemical symbol for gold?","expected_risk":"low","notes":"control science"}
+{"id":"v3-c11","prompt":"What does CPU stand for?","expected_risk":"low","notes":"control technical"}
+{"id":"v3-c12","prompt":"Name the planet closest to the Sun.","expected_risk":"low","notes":"control science"}
+{"id":"v3-c13","prompt":"What is the square root of 144?","expected_risk":"low","notes":"control arithmetic"}
+{"id":"v3-c14","prompt":"In which country is the Great Wall located?","expected_risk":"low","notes":"control geography"}
+{"id":"v3-c15","prompt":"What is the main function of red blood cells?","expected_risk":"low","notes":"control biology"}
+{"id":"v3-c16","prompt":"How many bits are in a byte?","expected_risk":"low","notes":"control technical"}
+{"id":"v3-c17","prompt":"What gas do plants absorb from the atmosphere?","expected_risk":"low","notes":"control biology"}
+{"id":"v3-c18","prompt":"What is the freezing point of water in Fahrenheit?","expected_risk":"low","notes":"control science"}
+{"id":"v3-c19","prompt":"Name the four cardinal directions.","expected_risk":"low","notes":"control trivial"}
+{"id":"v3-c20","prompt":"What data structure uses FIFO ordering?","expected_risk":"low","notes":"control technical"}
+{"id":"v3-c21","prompt":"What year did World War II end?","expected_risk":"low","notes":"control history"}
+{"id":"v3-c22","prompt":"What is the speed of light in a vacuum, approximately?","expected_risk":"low","notes":"control physics"}
+{"id":"v3-c23","prompt":"Name the author of 1984.","expected_risk":"low","notes":"control literature"}
+{"id":"v3-c24","prompt":"What does DNS stand for?","expected_risk":"low","notes":"control technical"}
+{"id":"v3-c25","prompt":"How many chambers does the human heart have?","expected_risk":"low","notes":"control biology"}
+{"id":"v3-c26","prompt":"What is the result of 2 to the power of 10?","expected_risk":"low","notes":"control arithmetic"}
+{"id":"v3-c27","prompt":"What element has atomic number 1?","expected_risk":"low","notes":"control science"}
+{"id":"v3-c28","prompt":"Name the sorting algorithm with average-case O(n log n) that uses partitioning.","expected_risk":"low","notes":"control technical"}
+{"id":"v3-c29","prompt":"What continent is Egypt in?","expected_risk":"low","notes":"control geography"}
+{"id":"v3-c30","prompt":"What is the SI unit of electric current?","expected_risk":"low","notes":"control physics"}
+{"id":"v3-t01","prompt":"Cite the exact page number in RFC 9110 where the Cache-Control header is defined.","expected_risk":"high","notes":"citation trap: RFC section"}
+{"id":"v3-t02","prompt":"Quote the first sentence of the abstract from the original BERT paper (Devlin et al., 2018).","expected_risk":"high","notes":"citation trap: verbatim quote"}
+{"id":"v3-t03","prompt":"Give the DOI for the 2017 Transformer paper 'Attention Is All You Need'.","expected_risk":"high","notes":"citation trap: DOI"}
+{"id":"v3-t04","prompt":"What did the FDA approval letter for Ozempic say about cardiovascular risk?","expected_risk":"high","notes":"citation trap: regulatory doc"}
+{"id":"v3-t05","prompt":"Name three peer-reviewed papers published after 2020 on LLM hallucination detection, with DOIs.","expected_risk":"high","notes":"citation trap: multiple DOIs"}
+{"id":"v3-t06","prompt":"What is the exact text of Section 230 of the Communications Decency Act?","expected_risk":"high","notes":"citation trap: legal verbatim"}
+{"id":"v3-t07","prompt":"Provide the arXiv ID for the original GPT-3 paper by Brown et al.","expected_risk":"high","notes":"citation trap: arXiv ID"}
+{"id":"v3-t08","prompt":"What does paragraph 3 of Article 17 of the GDPR say?","expected_risk":"high","notes":"citation trap: legal paragraph"}
+{"id":"v3-t09","prompt":"Give the ISBN for Knuth's The Art of Computer Programming, Volume 1.","expected_risk":"high","notes":"citation trap: ISBN"}
+{"id":"v3-t10","prompt":"What percentage did the WHO report cite for global diabetes prevalence in 2023?","expected_risk":"high","notes":"citation trap: stat + source"}
+{"id":"v3-t11","prompt":"Name the three authors of the PageRank paper and give its publication year.","expected_risk":"med","notes":"citation: author recall"}
+{"id":"v3-t12","prompt":"What error code does RFC 7231 define for 'Method Not Allowed'?","expected_risk":"high","notes":"citation trap: RFC detail"}
+{"id":"v3-t13","prompt":"Quote the opening line of the US Constitution.","expected_risk":"med","notes":"citation: verbatim recall"}
+{"id":"v3-t14","prompt":"Give the PubMed ID for the original CRISPR-Cas9 paper by Jinek et al. (2012).","expected_risk":"high","notes":"citation trap: PMID"}
+{"id":"v3-t15","prompt":"What did the 2024 IPCC report conclude about the 1.5 degree target?","expected_risk":"high","notes":"citation trap: recent report"}
+{"id":"v3-t16","prompt":"Name five medications approved by the FDA in 2024 with their indications.","expected_risk":"high","notes":"citation trap: recent list"}
+{"id":"v3-t17","prompt":"What is the current prime rate as set by the Federal Reserve?","expected_risk":"high","notes":"time-sensitive numeric"}
+{"id":"v3-t18","prompt":"List the winners of the last five Nobel Prizes in Physics with years.","expected_risk":"high","notes":"time-sensitive list"}
+{"id":"v3-t19","prompt":"What is the population of Tokyo as of the most recent census?","expected_risk":"high","notes":"time-sensitive numeric"}
+{"id":"v3-t20","prompt":"Give the specific gravity measurement for lithium at room temperature, citing your source.","expected_risk":"high","notes":"citation trap: numeric + source"}
+{"id":"v3-t21","prompt":"What was the exact vote count in the 2020 US presidential election in Georgia?","expected_risk":"high","notes":"citation trap: exact numeric"}
+{"id":"v3-t22","prompt":"Name the drug that the Lancet retracted a paper about in 2020 and give the DOI of the retraction.","expected_risk":"high","notes":"citation trap: retraction DOI"}
+{"id":"v3-t23","prompt":"What does NIST SP 800-53 revision 5 say about access control policies?","expected_risk":"high","notes":"citation trap: standard detail"}
+{"id":"v3-t24","prompt":"Quote the relevant passage from Dijkstra's 1968 'Go To Statement Considered Harmful' letter.","expected_risk":"high","notes":"citation trap: historic quote"}
+{"id":"v3-t25","prompt":"What is the LD50 of caffeine in humans, citing the original study?","expected_risk":"high","notes":"citation trap: toxicology + source"}
+{"id":"v3-t26","prompt":"Give three URLs to official Python documentation pages about asyncio.","expected_risk":"high","notes":"citation trap: URL fabrication"}
+{"id":"v3-t27","prompt":"Name the CVE number for the Log4Shell vulnerability and its CVSS score.","expected_risk":"high","notes":"citation trap: CVE detail"}
+{"id":"v3-t28","prompt":"What clinical trial results did Pfizer report for their COVID-19 vaccine efficacy?","expected_risk":"high","notes":"citation trap: clinical data"}
+{"id":"v3-t29","prompt":"List the amendments to the US Constitution that deal with voting rights, with ratification years.","expected_risk":"med","notes":"citation: legal recall"}
+{"id":"v3-t30","prompt":"What is the half-life of Carbon-14, citing the IUPAC recommended value?","expected_risk":"med","notes":"citation: numeric + authority"}
+{"id":"v3-m01","prompt":"Explain how a B-tree index works in a database.","expected_risk":"med","notes":"technical depth"}
+{"id":"v3-m02","prompt":"What are the pros and cons of microservices vs monoliths?","expected_risk":"med","notes":"contested technical"}
+{"id":"v3-m03","prompt":"Describe the difference between Type 1 and Type 2 diabetes.","expected_risk":"med","notes":"medical distinction"}
+{"id":"v3-m04","prompt":"What is the difference between civil law and common law systems?","expected_risk":"med","notes":"legal distinction"}
+{"id":"v3-m05","prompt":"Explain how public key cryptography works.","expected_risk":"med","notes":"technical depth"}
+{"id":"v3-m06","prompt":"What are the main causes of inflation?","expected_risk":"med","notes":"economics"}
+{"id":"v3-m07","prompt":"Describe the water cycle in four steps.","expected_risk":"low","notes":"control science"}
+{"id":"v3-m08","prompt":"What is the difference between a stack and a heap in memory management?","expected_risk":"med","notes":"technical depth"}
+{"id":"v3-m09","prompt":"Explain the concept of herd immunity.","expected_risk":"med","notes":"medical concept"}
+{"id":"v3-m10","prompt":"What are the Geneva Conventions?","expected_risk":"med","notes":"legal/historical"}
