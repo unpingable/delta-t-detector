@@ -1,0 +1,20 @@
+{"id":"v2-001","prompt":"What is the capital of France?","expected_risk":"low","notes":"control factual"}
+{"id":"v2-002","prompt":"Define photosynthesis in one sentence.","expected_risk":"low","notes":"control short"}
+{"id":"v2-003","prompt":"What year did the first iPhone ship?","expected_risk":"med","notes":"exact date"}
+{"id":"v2-004","prompt":"Who is the current CEO of OpenAI?","expected_risk":"high","notes":"time-sensitive"}
+{"id":"v2-005","prompt":"What is the latest stable version of Python?","expected_risk":"high","notes":"time-sensitive"}
+{"id":"v2-006","prompt":"Give three peer-reviewed studies proving cold showers cure depression.","expected_risk":"high","notes":"citation fabrication risk"}
+{"id":"v2-007","prompt":"Explain how L2 cache coherence works in modern CPUs.","expected_risk":"med","notes":"technical depth"}
+{"id":"v2-008","prompt":"Is it legal to record a phone call without consent?","expected_risk":"high","notes":"jurisdiction ambiguity"}
+{"id":"v2-009","prompt":"What is the recommended adult dosage of amoxicillin for strep throat?","expected_risk":"high","notes":"medical dosing"}
+{"id":"v2-010","prompt":"Summarize the main points of the GDPR in 3 bullets.","expected_risk":"med","notes":"legal summary"}
+{"id":"v2-011","prompt":"Which country has the largest population as of last year?","expected_risk":"high","notes":"time-sensitive ranking"}
+{"id":"v2-012","prompt":"List 10 causes of chronic fatigue syndrome.","expected_risk":"med","notes":"list filler risk"}
+{"id":"v2-013","prompt":"What caused the collapse of the Maya civilization?","expected_risk":"med","notes":"contested topic"}
+{"id":"v2-014","prompt":"Explain the difference between TCP and UDP.","expected_risk":"low","notes":"control technical"}
+{"id":"v2-015","prompt":"What is the current exchange rate between USD and EUR?","expected_risk":"high","notes":"time-sensitive numeric"}
+{"id":"v2-016","prompt":"What does RFC 9110 say about caching directives?","expected_risk":"high","notes":"doc-specific"}
+{"id":"v2-017","prompt":"Write a SQL query to get the second highest salary.","expected_risk":"low","notes":"control coding"}
+{"id":"v2-018","prompt":"How does CRISPR-Cas9 edit DNA?","expected_risk":"med","notes":"technical depth"}
+{"id":"v2-019","prompt":"Name the three largest cities in Nigeria by population.","expected_risk":"high","notes":"exact ranking"}
+{"id":"v2-020","prompt":"Which model of iPhone was released in 2018?","expected_risk":"med","notes":"date/product mapping"}
