@@ -64,19 +64,20 @@ def run_eval(
     baseline: bool = False,
     output_csv: Optional[str] = None,
     store: bool = True,
+    multi_invariant: bool = False,
 ) -> Optional[Path]:
     from .core import DeltaTDetector
     config = DetectorConfig()
     config.device = device
-    
+
     detector = DeltaTDetector(model_name=model, config=config)
     detector.set_risk_profile(profile_name)
-    
+
     if baseline:
         detector.load_baseline(model)
-    
+
     profile = RISK_PROFILES.get(profile_name, RISK_PROFILES["general"])
-    
+
     fieldnames = [
         "id",
         "expected_risk",
@@ -95,7 +96,9 @@ def run_eval(
         "debt_cap_triggered",
         "notes"
     ]
-    
+    if multi_invariant:
+        fieldnames.extend(["n_violated", "aggregate_score"])
+
     started_at: Optional[str] = None
     if store:
         from .run_store import PredictionRecord, store_run, _utcnow_iso
@@ -109,7 +112,10 @@ def run_eval(
     writer.writeheader()
 
     for item in load_jsonl(jsonl_path):
-        result = detector.detect(item.prompt, generate_report=False)
+        if multi_invariant:
+            result = detector.detect_multi_invariant(item.prompt, test_semantic=True)
+        else:
+            result = detector.detect(item.prompt, generate_report=False)
         features = result.features or {}
 
         anomaly_score = None
@@ -123,6 +129,23 @@ def run_eval(
                 anomaly_score = None
 
         flags = compute_guard_flags(features, profile, result.temporal_debt, anomaly_score, result.prediction)
+
+        # Extract multi-invariant data from report
+        inv_results_dict: Optional[Dict[str, Any]] = None
+        n_violated: Optional[int] = None
+        aggregate_score: Optional[float] = None
+
+        if multi_invariant and result.report:
+            report_inv = result.report.invariant_results
+            if isinstance(report_inv, dict):
+                inv_results_dict = {}
+                for inv_name, inv_data in report_inv.items():
+                    if hasattr(inv_data, 'to_dict'):
+                        inv_results_dict[inv_name] = inv_data.to_dict()
+                    elif isinstance(inv_data, dict):
+                        inv_results_dict[inv_name] = inv_data
+            n_violated = result.report.n_invariants_violated
+            aggregate_score = getattr(result.report, 'confidence', None)
 
         row = {
             "id": item.id,
@@ -142,6 +165,9 @@ def run_eval(
             "debt_cap_triggered": flags["debt_cap"],
             "notes": item.notes
         }
+        if multi_invariant:
+            row["n_violated"] = n_violated
+            row["aggregate_score"] = aggregate_score
         writer.writerow(row)
 
         if store:
@@ -156,6 +182,9 @@ def run_eval(
                 features=features,
                 guard_flags=flags,
                 notes=item.notes,
+                invariant_results=inv_results_dict,
+                n_violated=n_violated,
+                aggregate_score=aggregate_score,
             ))
 
     if out_f:
@@ -170,6 +199,7 @@ def run_eval(
             device=device,
             baseline_used=baseline,
             started_at=started_at,
+            multi_invariant=multi_invariant,
         )
         return run_dir
 

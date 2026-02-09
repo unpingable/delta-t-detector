@@ -90,6 +90,10 @@ class PredictionRecord:
     features: Dict[str, Any]
     guard_flags: Dict[str, bool]
     notes: str = ""
+    # Multi-invariant fields (None for single-invariant runs)
+    invariant_results: Optional[Dict[str, Dict[str, Any]]] = None
+    n_violated: Optional[int] = None
+    aggregate_score: Optional[float] = None
 
 
 @dataclass
@@ -110,6 +114,7 @@ class RunManifest:
     git_commit: str
     git_dirty: bool
     corpus_size: int
+    multi_invariant: bool = False
 
 
 @dataclass
@@ -124,6 +129,9 @@ class RunSummary:
     high_risk_recall: Optional[float]
     low_risk_precision: Optional[float]
     confusion_matrix: Dict[str, Dict[str, int]]
+    # Multi-invariant (empty for single-invariant runs)
+    invariant_violation_counts: Dict[str, int] = field(default_factory=dict)
+    invariant_mean_scores: Dict[str, float] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +147,10 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
     # confusion: {expected: {predicted: count}}
     confusion: Dict[str, Dict[str, int]] = {}
 
+    # Multi-invariant aggregation
+    inv_violation_counts: Dict[str, int] = {}
+    inv_scores: Dict[str, List[float]] = {}
+
     for p in predictions:
         pred_counts[p.prediction] = pred_counts.get(p.prediction, 0) + 1
         confs.append(p.confidence)
@@ -152,6 +164,14 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
             confusion[p.expected_risk] = {}
         bucket = confusion[p.expected_risk]
         bucket[p.prediction] = bucket.get(p.prediction, 0) + 1
+
+        if p.invariant_results:
+            for inv_name, inv_data in p.invariant_results.items():
+                if inv_data.get("violated"):
+                    inv_violation_counts[inv_name] = inv_violation_counts.get(inv_name, 0) + 1
+                score = inv_data.get("score")
+                if score is not None:
+                    inv_scores.setdefault(inv_name, []).append(score)
 
     # High-risk recall: of items expected high risk, how many predicted unstable/hallucination?
     high_risk_labels = {"high", "hallucination", "temporal_unstable"}
@@ -189,6 +209,8 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
     )
     low_risk_precision = lr_correct / lr_predicted if lr_predicted > 0 else None
 
+    inv_mean_scores = {name: mean(scores) for name, scores in inv_scores.items()}
+
     return RunSummary(
         prediction_counts=pred_counts,
         mean_confidence=mean(confs) if confs else 0.0,
@@ -199,6 +221,8 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
         high_risk_recall=high_risk_recall,
         low_risk_precision=low_risk_precision,
         confusion_matrix=confusion,
+        invariant_violation_counts=inv_violation_counts,
+        invariant_mean_scores=inv_mean_scores,
     )
 
 
@@ -215,6 +239,7 @@ def store_run(
     baseline_used: bool = False,
     runs_root: Optional[str] = None,
     started_at: Optional[str] = None,
+    multi_invariant: bool = False,
 ) -> Path:
     """Write a complete run bundle.  Returns the run directory path.
 
@@ -272,6 +297,7 @@ def store_run(
         git_commit=commit,
         git_dirty=dirty,
         corpus_size=len(predictions),
+        multi_invariant=multi_invariant,
     )
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(asdict(manifest), indent=2, default=str))

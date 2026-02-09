@@ -146,6 +146,7 @@ def run_eval(args):
         baseline=args.baseline,
         output_csv=args.output,
         store=not args.no_store,
+        multi_invariant=args.multi_invariant,
     )
     if run_dir is not None:
         print(f"Run stored: {run_dir}", file=sys.stderr)
@@ -399,6 +400,8 @@ Examples:
                              help='Write CSV output to file (default: stdout)')
     eval_parser.add_argument('--no-store', action='store_true',
                              help='Skip storing run bundle under runs/')
+    eval_parser.add_argument('--multi-invariant', action='store_true',
+                             help='Use multi-invariant detection (Inv-1 + Inv-2)')
 
     # Eval diff command
     diff_parser = subparsers.add_parser('eval-diff', help='Diff two eval CSV runs')

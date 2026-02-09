@@ -1252,6 +1252,87 @@ class TestRunStore:
             manifest = json.loads((rd / "manifest.json").read_text())
             assert manifest["run_store_version"] == RUN_STORE_VERSION
 
+    # --- Multi-invariant fields ---
+
+    def _make_multi_invariant_predictions(self, n: int = 3) -> list:
+        preds = []
+        for i in range(n):
+            preds.append(PredictionRecord(
+                id=f"item_{i}",
+                prompt=f"prompt {i}",
+                expected_risk="low" if i % 2 == 0 else "high",
+                prediction="truthful" if i % 2 == 0 else "hallucination",
+                confidence=0.8 + i * 0.01,
+                temporal_debt=0.1 + i * 0.05,
+                anomaly_score=None,
+                features={"entropy_variance": 0.2},
+                guard_flags={"low_evidence": False, "anomaly": False, "debt_cap": False},
+                notes="",
+                invariant_results={
+                    "temporal_coherence": {"name": "temporal_coherence", "score": 0.7 + i * 0.05, "violated": i % 2 != 0},
+                    "semantic_conservation": {"name": "semantic_conservation", "score": 0.6 + i * 0.1, "violated": i == 2},
+                },
+                n_violated=1 if i % 2 != 0 else 0,
+                aggregate_score=0.7 + i * 0.05,
+            ))
+        return preds
+
+    def test_multi_invariant_predictions_in_jsonl(self):
+        """Multi-invariant fields are serialized in predictions.jsonl"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_multi_invariant_predictions()
+            rd = store_run(preds, cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"), multi_invariant=True)
+            lines = (rd / "predictions.jsonl").read_text().strip().split("\n")
+            obj = json.loads(lines[1])  # item_1 has invariant violations
+            assert obj["n_violated"] == 1
+            assert "temporal_coherence" in obj["invariant_results"]
+            assert obj["invariant_results"]["temporal_coherence"]["violated"] is True
+
+    def test_multi_invariant_manifest_flag(self):
+        """Manifest records multi_invariant=True"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_multi_invariant_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"), multi_invariant=True)
+            manifest = json.loads((rd / "manifest.json").read_text())
+            assert manifest["multi_invariant"] is True
+
+    def test_multi_invariant_summary_violation_counts(self):
+        """Summary tracks per-invariant violation counts"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_multi_invariant_predictions(3)
+            rd = store_run(preds, cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"), multi_invariant=True)
+            summary = json.loads((rd / "summary.json").read_text())
+            assert summary["invariant_violation_counts"]["temporal_coherence"] == 1
+            assert summary["invariant_violation_counts"]["semantic_conservation"] == 1
+
+    def test_multi_invariant_summary_mean_scores(self):
+        """Summary tracks per-invariant mean scores"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_multi_invariant_predictions(3)
+            rd = store_run(preds, cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"), multi_invariant=True)
+            summary = json.loads((rd / "summary.json").read_text())
+            assert "temporal_coherence" in summary["invariant_mean_scores"]
+            assert "semantic_conservation" in summary["invariant_mean_scores"]
+
+    def test_single_invariant_has_empty_invariant_fields(self):
+        """Single-invariant runs have empty invariant summary fields"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            summary = json.loads((rd / "summary.json").read_text())
+            assert summary["invariant_violation_counts"] == {}
+            assert summary["invariant_mean_scores"] == {}
+            manifest = json.loads((rd / "manifest.json").read_text())
+            assert manifest["multi_invariant"] is False
+
 
 # ============================================================================
 # Integration Tests
