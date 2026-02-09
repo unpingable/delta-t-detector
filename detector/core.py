@@ -476,11 +476,11 @@ class DeltaTDetector:
                 report=None
             )
         
-        # Compute temporal debt
-        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
-        
         # Get threshold from profile
         profile = self.config.get_profile()
+
+        # Compute temporal debt
+        debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights)
         
         # Normalize with baseline if available
         normalized = None

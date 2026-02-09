@@ -68,7 +68,14 @@ class TemporalFeatures:
     logprob_variance: float = 0.0
     entropy_trajectory_slope: float = 0.0
     confidence_monotonicity: float = 0.0
-    
+
+    # Governor integration features
+    early_phase_confidence: float = 0.0
+    middle_phase_confidence: float = 0.0
+    late_phase_confidence: float = 0.0
+    mean_logprob: float = 0.0
+    unique_token_ratio: float = 0.0
+
     # Generation metadata
     generation: str = ""
     generation_length: int = 0
@@ -96,6 +103,11 @@ class TemporalFeatures:
             'logprob_variance': self.logprob_variance,
             'entropy_trajectory_slope': self.entropy_trajectory_slope,
             'confidence_monotonicity': self.confidence_monotonicity,
+            'early_phase_confidence': self.early_phase_confidence,
+            'middle_phase_confidence': self.middle_phase_confidence,
+            'late_phase_confidence': self.late_phase_confidence,
+            'mean_logprob': self.mean_logprob,
+            'unique_token_ratio': self.unique_token_ratio,
             'generation': self.generation,
             'generation_length': self.generation_length
         }
@@ -122,7 +134,12 @@ class TemporalFeatures:
             'confidence_second_derivative',
             'logprob_variance',
             'entropy_trajectory_slope',
-            'confidence_monotonicity'
+            'confidence_monotonicity',
+            'early_phase_confidence',
+            'middle_phase_confidence',
+            'late_phase_confidence',
+            'mean_logprob',
+            'unique_token_ratio'
         ]
 
 
@@ -178,7 +195,11 @@ class FeatureExtractor:
         # Generation metadata
         features.generation = primary.text
         features.generation_length = len(primary)
-        
+
+        # Unique token ratio
+        if len(primary.tokens) > 0:
+            features.unique_token_ratio = len(set(primary.tokens)) / len(primary.tokens)
+
         return features
     
     def _extract_confidence_features(
@@ -237,13 +258,22 @@ class FeatureExtractor:
         
         # Segment into phases
         early, middle, late = phase_segment(entropies)
-        
+
         if early:
             features.early_phase_entropy = float(np.mean(early))
         if middle:
             features.middle_phase_entropy = float(np.mean(middle))
         if late:
             features.late_phase_entropy = float(np.mean(late))
+
+        # Phase confidence means
+        early_c, middle_c, late_c = phase_segment(confidence)
+        if early_c:
+            features.early_phase_confidence = float(np.mean(early_c))
+        if middle_c:
+            features.middle_phase_confidence = float(np.mean(middle_c))
+        if late_c:
+            features.late_phase_confidence = float(np.mean(late_c))
         
         # Detect phase transitions
         features.phase_transition_index = detect_phase_transition(
@@ -288,6 +318,9 @@ class FeatureExtractor:
         
         # Logprob variance (smooth vs jumpy generation)
         features.logprob_variance = float(np.var(logprobs))
+
+        # Mean logprob (average token likelihood)
+        features.mean_logprob = float(np.mean(logprobs))
         
         # Entropy trajectory slope (overall trend)
         if len(entropies) >= 2:

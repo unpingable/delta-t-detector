@@ -89,6 +89,12 @@ from .reporting import (
     SIGNAL_SCHEMA_VERSION
 )
 
+from .governor_signal import (
+    build_governor_signal,
+    write_governor_signal,
+    GOVERNOR_SIGNAL_VERSION
+)
+
 # Optional API providers (may not be installed)
 try:
     from .api_providers import (
@@ -140,6 +146,11 @@ __all__ = [
     'build_signal',
     'format_signal_json',
     'SIGNAL_SCHEMA_VERSION',
+
+    # Governor Signal
+    'build_governor_signal',
+    'write_governor_signal',
+    'GOVERNOR_SIGNAL_VERSION',
     
     # API Providers (if available)
     'OpenAIProvider',

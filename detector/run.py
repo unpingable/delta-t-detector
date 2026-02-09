@@ -41,9 +41,9 @@ def run_detection(args):
         print("Error: Provide either --prompt or --file")
         sys.exit(1)
     
-    for prompt in prompts:
+    for idx, prompt in enumerate(prompts):
         print(f"\nPrompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
-        
+
         if args.multi_invariant:
             result = detector.detect_multi_invariant(
                 prompt,
@@ -52,13 +52,31 @@ def run_detection(args):
             )
         else:
             result = detector.detect(prompt)
-        
+
         if args.verbose and result.report:
             print(format_console_report(result.report))
         else:
             print(f"  Prediction: {result.prediction}")
             print(f"  Confidence: {result.confidence:.1%}")
             print(f"  Temporal debt: {result.temporal_debt:.3f}")
+
+        # Governor signal emission
+        if args.signal_out:
+            from detector.governor_signal import build_governor_signal, write_governor_signal
+            signal = build_governor_signal(
+                result,
+                run_id=args.run_id,
+                turn_id=args.turn_id,
+                model_id=args.model,
+                profile=args.profile,
+            )
+            if len(prompts) > 1:
+                base, ext = os.path.splitext(args.signal_out)
+                sig_path = f"{base}_{idx}{ext}"
+            else:
+                sig_path = args.signal_out
+            write_governor_signal(signal, sig_path)
+            print(f"  Signal written to {sig_path}")
 
 
 def run_tests(args):
@@ -239,6 +257,12 @@ Examples:
                                help='Validate URLs/DOIs (requires network)')
     detect_parser.add_argument('--test-semantic', action='store_true',
                                help='Test semantic conservation')
+    detect_parser.add_argument('--signal-out', type=str, default=None,
+                               help='Write governor signal JSON to this path')
+    detect_parser.add_argument('--run-id', type=str, default='',
+                               help='Run ID for governor signal')
+    detect_parser.add_argument('--turn-id', type=str, default='',
+                               help='Turn ID for governor signal')
     detect_parser.add_argument('--verbose', '-v', action='store_true',
                                help='Show full report')
     

@@ -36,6 +36,10 @@ from detector.reporting import (
     DetectionReport, ReportGenerator, format_console_report,
     build_signal, SIGNAL_SCHEMA_VERSION
 )
+from detector.governor_signal import (
+    build_governor_signal, write_governor_signal,
+    GOVERNOR_SIGNAL_VERSION, _full_sha256, _build_raw
+)
 from detector.eval import compute_guard_flags
 from detector.eval_diff import diff_csv
 
@@ -259,17 +263,78 @@ class TestFeatures:
     def test_feature_extractor_basic(self):
         """Test basic feature extraction"""
         extractor = FeatureExtractor()
-        
+
         trace = GenerationTrace(
             tokens=['a'] * 20,
             logprobs=[-0.1] * 20,
             entropies=list(np.linspace(2, 0.5, 20))  # Decreasing entropy
         )
-        
+
         features = extractor.extract([trace])
         assert features is not None
         assert features.mean_confidence > 0
         assert features.generation_length == 20
+
+    def test_phase_confidence_features_populated(self):
+        """Phase confidence features should be populated by extractor"""
+        extractor = FeatureExtractor()
+        trace = GenerationTrace(
+            tokens=['a'] * 20,
+            logprobs=[-0.1] * 20,
+            entropies=list(np.linspace(2, 0.5, 20))
+        )
+        features = extractor.extract([trace])
+        assert features.early_phase_confidence > 0
+        assert features.middle_phase_confidence > 0
+        assert features.late_phase_confidence > 0
+
+    def test_mean_logprob_reflects_average(self):
+        """mean_logprob should equal the average of logprobs"""
+        extractor = FeatureExtractor()
+        logprobs = [-0.1, -0.2, -0.3, -0.4, -0.5]
+        trace = GenerationTrace(
+            tokens=['a'] * 5,
+            logprobs=logprobs,
+            entropies=[1.0] * 5
+        )
+        features = extractor.extract([trace])
+        expected = float(np.mean(logprobs))
+        assert abs(features.mean_logprob - expected) < 1e-6
+
+    def test_unique_token_ratio(self):
+        """unique_token_ratio should be unique/total"""
+        extractor = FeatureExtractor()
+        tokens = ['a', 'b', 'a', 'c', 'b']  # 3 unique / 5 total = 0.6
+        trace = GenerationTrace(
+            tokens=tokens,
+            logprobs=[-0.1] * 5,
+            entropies=[1.0] * 5
+        )
+        features = extractor.extract([trace])
+        assert abs(features.unique_token_ratio - 0.6) < 1e-6
+
+    def test_new_fields_in_to_dict(self):
+        """New governor fields should appear in to_dict()"""
+        features = TemporalFeatures(
+            early_phase_confidence=0.3,
+            middle_phase_confidence=0.5,
+            late_phase_confidence=0.7,
+            mean_logprob=-0.2,
+            unique_token_ratio=0.8
+        )
+        d = features.to_dict()
+        assert d['early_phase_confidence'] == 0.3
+        assert d['middle_phase_confidence'] == 0.5
+        assert d['late_phase_confidence'] == 0.7
+        assert d['mean_logprob'] == -0.2
+        assert d['unique_token_ratio'] == 0.8
+
+    def test_new_fields_in_feature_columns(self):
+        """New governor fields should appear in feature_columns()"""
+        cols = TemporalFeatures.feature_columns()
+        for name in ['early_phase_confidence', 'middle_phase_confidence',
+                     'late_phase_confidence', 'mean_logprob', 'unique_token_ratio']:
+            assert name in cols
 
 
 # ============================================================================
@@ -766,6 +831,151 @@ class TestFeatureSerialization:
         )
         d = features.to_dict()
         assert d['phase_transition_index'] == 7
+
+
+# ============================================================================
+# Governor Signal Tests
+# ============================================================================
+
+class TestGovernorSignal:
+    """Tests for the governor signal emitter"""
+
+    def _make_result(self):
+        """Helper: build a minimal DetectionResult-like object."""
+        from types import SimpleNamespace
+        features = TemporalFeatures(
+            max_confidence_slope=0.4,
+            mean_confidence=0.7,
+            confidence_acceleration=0.1,
+            final_confidence=0.85,
+            tokens_to_high_conf=12,
+            entropy_variance=0.25,
+            perturbation_sensitivity=0.3,
+            token_jaccard=0.9,
+            max_entropy_jump=0.15,
+            entropy_recovery_detected=True,
+            confidence_monotonicity=0.6,
+            early_phase_entropy=1.2,
+            middle_phase_entropy=0.8,
+            late_phase_entropy=0.4,
+            early_phase_confidence=0.3,
+            middle_phase_confidence=0.5,
+            late_phase_confidence=0.7,
+            mean_logprob=-0.2,
+            unique_token_ratio=0.8,
+            generation="Paris is the capital of France.",
+            generation_length=6,
+        )
+        return SimpleNamespace(
+            prediction='truthful',
+            confidence=0.85,
+            temporal_debt=0.3,
+            features=features.to_dict(),
+            report=None,
+        )
+
+    def test_signal_has_required_keys(self):
+        """Signal should have all top-level keys"""
+        signal = build_governor_signal(self._make_result())
+        for key in ['key', 'raw', 'collapsed', 'detector_version', 'profile']:
+            assert key in signal
+
+    def test_collapsed_is_null(self):
+        """collapsed must be None (governor does its own collapse)"""
+        signal = build_governor_signal(self._make_result())
+        assert signal['collapsed'] is None
+
+    def test_raw_has_exactly_19_fields(self):
+        """raw must contain exactly 19 fields"""
+        signal = build_governor_signal(self._make_result())
+        assert len(signal['raw']) == 19
+
+    def test_raw_field_names(self):
+        """raw must use the governor's expected field names"""
+        signal = build_governor_signal(self._make_result())
+        expected = {
+            'temporal_debt', 'confidence_slope', 'acceleration',
+            'max_entropy_jump', 'entropy_recovery_detected',
+            'entropy_variance', 'token_jaccard', 'perturbation_sensitivity',
+            'tokens_to_high_conf', 'confidence_monotonicity',
+            'early_phase_entropy', 'mid_phase_entropy', 'late_phase_entropy',
+            'early_phase_confidence', 'mid_phase_confidence', 'late_phase_confidence',
+            'mean_logprob', 'response_length', 'unique_token_ratio',
+        }
+        assert set(signal['raw'].keys()) == expected
+
+    def test_renamed_fields_carry_correct_values(self):
+        """Renamed fields should map to the right detector values"""
+        result = self._make_result()
+        signal = build_governor_signal(result)
+        raw = signal['raw']
+        assert raw['confidence_slope'] == result.features['max_confidence_slope']
+        assert raw['acceleration'] == result.features['confidence_acceleration']
+        assert raw['mid_phase_entropy'] == result.features['middle_phase_entropy']
+        assert raw['mid_phase_confidence'] == result.features['middle_phase_confidence']
+        assert raw['response_length'] == float(result.features['generation_length'])
+
+    def test_key_has_required_fields(self):
+        """key must contain run_id, turn_id, model_id, response_hash"""
+        signal = build_governor_signal(self._make_result())
+        for field in ['run_id', 'turn_id', 'model_id', 'response_hash']:
+            assert field in signal['key']
+
+    def test_response_hash_is_full_sha256(self):
+        """response_hash must be full 64-char hex (not truncated)"""
+        signal = build_governor_signal(self._make_result())
+        h = signal['key']['response_hash']
+        assert len(h) == 64
+        assert all(c in '0123456789abcdef' for c in h)
+
+    def test_response_hash_matches_generation(self):
+        """response_hash should match sha256 of the generation text"""
+        import hashlib
+        result = self._make_result()
+        signal = build_governor_signal(result)
+        expected = hashlib.sha256(result.features['generation'].encode()).hexdigest()
+        assert signal['key']['response_hash'] == expected
+
+    def test_detector_version(self):
+        """detector_version should be 2.0.0"""
+        signal = build_governor_signal(self._make_result())
+        assert signal['detector_version'] == '2.0.0'
+
+    def test_signal_is_json_serializable(self):
+        """Signal dict must be fully JSON-serializable"""
+        signal = build_governor_signal(self._make_result())
+        s = json.dumps(signal)
+        parsed = json.loads(s)
+        assert parsed['detector_version'] == '2.0.0'
+
+    def test_write_governor_signal_creates_file(self):
+        """write_governor_signal should create a valid JSON file"""
+        signal = build_governor_signal(self._make_result())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, 'test_signal.json')
+            write_governor_signal(signal, path)
+            with open(path) as f:
+                loaded = json.load(f)
+            assert loaded['raw']['confidence_slope'] == signal['raw']['confidence_slope']
+
+    def test_temporal_debt_from_result(self):
+        """temporal_debt in raw must come from result.temporal_debt"""
+        result = self._make_result()
+        signal = build_governor_signal(result)
+        assert signal['raw']['temporal_debt'] == result.temporal_debt
+
+    def test_entropy_recovery_cast_to_float(self):
+        """entropy_recovery_detected should be float (not bool)"""
+        signal = build_governor_signal(self._make_result())
+        val = signal['raw']['entropy_recovery_detected']
+        assert isinstance(val, float)
+        assert val == 1.0  # True -> 1.0
+
+    def test_governor_signal_schema_file_exists(self):
+        """Governor signal schema file should exist"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        schema_path = os.path.join(root, 'schema', 'governor_signal.schema.json')
+        assert os.path.exists(schema_path)
 
 
 # ============================================================================

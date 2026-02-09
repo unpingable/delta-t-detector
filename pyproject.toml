@@ -37,5 +37,8 @@ dev = [
 Homepage = "https://github.com/unpingable/delta-t-detector"
 Repository = "https://github.com/unpingable/delta-t-detector"
 
+[tool.pytest.ini_options]
+markers = ["gpu: tests requiring a CUDA GPU (skipped without one)"]
+
 [tool.setuptools.packages.find]
 include = ["detector*"]

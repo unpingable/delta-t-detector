@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "governor_signal.schema.json",
+  "title": "DetectorSignalFile",
+  "description": "Governor-consumable signal emitted by the Δt detector. The governor reads this file via detector_integration.py.",
+  "type": "object",
+  "required": ["key", "raw", "collapsed", "detector_version", "profile"],
+  "properties": {
+    "key": {
+      "type": "object",
+      "required": ["run_id", "turn_id", "model_id", "response_hash"],
+      "properties": {
+        "run_id":        { "type": "string" },
+        "turn_id":       { "type": "string" },
+        "model_id":      { "type": "string" },
+        "response_hash": { "type": "string", "minLength": 64, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "raw": {
+      "type": "object",
+      "required": [
+        "temporal_debt",
+        "confidence_slope",
+        "acceleration",
+        "max_entropy_jump",
+        "entropy_recovery_detected",
+        "entropy_variance",
+        "token_jaccard",
+        "perturbation_sensitivity",
+        "tokens_to_high_conf",
+        "confidence_monotonicity",
+        "early_phase_entropy",
+        "mid_phase_entropy",
+        "late_phase_entropy",
+        "early_phase_confidence",
+        "mid_phase_confidence",
+        "late_phase_confidence",
+        "mean_logprob",
+        "response_length",
+        "unique_token_ratio"
+      ],
+      "properties": {
+        "temporal_debt":             { "type": "number" },
+        "confidence_slope":          { "type": "number" },
+        "acceleration":              { "type": "number" },
+        "max_entropy_jump":          { "type": "number" },
+        "entropy_recovery_detected": { "type": "number" },
+        "entropy_variance":          { "type": "number" },
+        "token_jaccard":             { "type": "number" },
+        "perturbation_sensitivity":  { "type": "number" },
+        "tokens_to_high_conf":       { "type": "number" },
+        "confidence_monotonicity":   { "type": "number" },
+        "early_phase_entropy":       { "type": "number" },
+        "mid_phase_entropy":         { "type": "number" },
+        "late_phase_entropy":        { "type": "number" },
+        "early_phase_confidence":    { "type": "number" },
+        "mid_phase_confidence":      { "type": "number" },
+        "late_phase_confidence":     { "type": "number" },
+        "mean_logprob":              { "type": "number" },
+        "response_length":           { "type": "number" },
+        "unique_token_ratio":        { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "collapsed":        { "type": "null" },
+    "detector_version": { "type": "string" },
+    "profile":          { "type": "string" }
+  },
+  "additionalProperties": false
+}
