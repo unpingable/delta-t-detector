@@ -63,7 +63,7 @@ def run_eval(
     device: str = "auto",
     baseline: bool = False,
     output_csv: Optional[str] = None,
-    store: bool = False,
+    store: bool = True,
 ) -> Optional[Path]:
     from .core import DeltaTDetector
     config = DetectorConfig()

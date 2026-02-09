@@ -145,7 +145,7 @@ def run_eval(args):
         device=args.device,
         baseline=args.baseline,
         output_csv=args.output,
-        store=args.store,
+        store=not args.no_store,
     )
     if run_dir is not None:
         print(f"Run stored: {run_dir}", file=sys.stderr)
@@ -397,8 +397,8 @@ Examples:
                              help='Use baseline normalization if available')
     eval_parser.add_argument('--output', type=str, default=None,
                              help='Write CSV output to file (default: stdout)')
-    eval_parser.add_argument('--store', action='store_true',
-                             help='Store run bundle under runs/')
+    eval_parser.add_argument('--no-store', action='store_true',
+                             help='Skip storing run bundle under runs/')
 
     # Eval diff command
     diff_parser = subparsers.add_parser('eval-diff', help='Diff two eval CSV runs')
