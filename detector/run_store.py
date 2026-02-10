@@ -10,7 +10,9 @@ is SHA-256 verified against the manifest.
 import hashlib
 import json
 import os
+import platform
 import subprocess
+import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,6 +75,46 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def collect_platform_info() -> Dict[str, Any]:
+    """Collect platform metadata for cross-machine interpretability."""
+    sysname = platform.system().lower()   # 'linux' or 'darwin'
+    machine = platform.machine().lower()  # 'x86_64' or 'arm64'
+    platform_id = f"{sysname}-{machine}"
+
+    # Resolver backend
+    try:
+        import aiohttp
+        resolver = "aiohttp"
+    except ImportError:
+        resolver = "requests"
+
+    # Check if cache is enabled (caller can override)
+    toolchain = {
+        "python": platform.python_version(),
+    }
+    try:
+        import numpy
+        toolchain["numpy"] = numpy.__version__
+    except ImportError:
+        pass
+    try:
+        import torch
+        toolchain["torch"] = torch.__version__
+        if torch.cuda.is_available():
+            toolchain["cuda"] = torch.version.cuda
+            toolchain["gpu"] = torch.cuda.get_device_name(0)
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            toolchain["accelerator"] = "mps"
+    except ImportError:
+        pass
+
+    return {
+        "platform_id": platform_id,
+        "resolver_backend": resolver,
+        "toolchain_versions": toolchain,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
@@ -121,6 +163,10 @@ class RunManifest:
     git_dirty: bool
     corpus_size: int
     multi_invariant: bool = False
+    # Platform metadata for cross-machine interpretability
+    platform_id: str = ""
+    resolver_backend: str = ""
+    toolchain_versions: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -354,6 +400,7 @@ def store_run(
     summary_path.write_text(json.dumps(asdict(summary), indent=2, default=str))
 
     # 3. manifest.json (last — crash-safety gate)
+    plat = collect_platform_info()
     manifest = RunManifest(
         run_store_version=RUN_STORE_VERSION,
         run_id=run_id,
@@ -371,6 +418,9 @@ def store_run(
         git_dirty=dirty,
         corpus_size=len(predictions),
         multi_invariant=multi_invariant,
+        platform_id=plat["platform_id"],
+        resolver_backend=plat["resolver_backend"],
+        toolchain_versions=plat["toolchain_versions"],
     )
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(asdict(manifest), indent=2, default=str))

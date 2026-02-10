@@ -46,6 +46,7 @@ from detector.run_store import (
     corpus_hash, derive_run_id, git_head_sha, git_dirty,
     store_run, list_runs, load_run, diff_runs, verify_run,
     PredictionRecord, RUN_STORE_VERSION, _sha256_bytes,
+    collect_platform_info,
 )
 
 
@@ -1748,6 +1749,30 @@ class TestRunStore:
             assert summary["invariant_mean_scores"] == {}
             manifest = json.loads((rd / "manifest.json").read_text())
             assert manifest["multi_invariant"] is False
+
+    def test_platform_metadata_in_manifest(self):
+        """Manifest includes platform_id, resolver_backend, toolchain_versions"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            rd = store_run(self._make_predictions(), cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"))
+            manifest = json.loads((rd / "manifest.json").read_text())
+            assert "platform_id" in manifest
+            assert manifest["platform_id"] != ""
+            assert "resolver_backend" in manifest
+            assert manifest["resolver_backend"] in ("aiohttp", "requests")
+            assert "toolchain_versions" in manifest
+            assert "python" in manifest["toolchain_versions"]
+
+    def test_collect_platform_info(self):
+        """collect_platform_info returns expected keys"""
+        info = collect_platform_info()
+        assert "platform_id" in info
+        assert "-" in info["platform_id"]  # e.g. "linux-x86_64"
+        assert "resolver_backend" in info
+        assert "toolchain_versions" in info
+        assert "python" in info["toolchain_versions"]
+        assert "numpy" in info["toolchain_versions"]
 
     def test_flight_recorder_fields_present(self):
         """Summary includes flight recorder two-axis fields"""
