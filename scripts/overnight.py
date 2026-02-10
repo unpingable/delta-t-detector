@@ -8,8 +8,9 @@ Lanes:
   2. Citations — citation-forcing corpus, exercises Inv-3 (~15 min)
   3. Ladder    — citation ladder L1-L6, 60 prompts (~30 min)
   4. N-Pressure — N=1,2,3,5 citation pressure curve (~10 min)
-  5. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
-  6. Replay    — CPU-only threshold scan on all new runs (minutes)
+  5. Canonical — N=2 + L4 regression lane, max fabrication sensitivity (~8 min)
+  6. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
+  7. Replay    — CPU-only threshold scan on all new runs (minutes)
 
 Usage:
     bin/overnight.sh                    # full suite
@@ -42,6 +43,7 @@ CORPORA = {
     "citations": "data/citation_forcing_30.jsonl",
     "ladder": "data/citation_ladder_60.jsonl",
     "n_pressure": "data/n_pressure_20.jsonl",
+    "canonical": "data/canonical_15.jsonl",
 }
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEVICE = "cuda"
@@ -51,7 +53,7 @@ PROFILE_NAME = "general"
 TEMP_GRID = [0.5, 0.7, 0.9]
 NPERTURB_GRID = [3, 5]
 
-ALL_LANES = ["canary", "baseline", "citations", "ladder", "n_pressure", "sweep", "replay"]
+ALL_LANES = ["canary", "baseline", "citations", "ladder", "n_pressure", "canonical", "sweep", "replay"]
 
 
 def run_one_eval(detector, corpus_path, profile_name, label=""):
@@ -311,7 +313,7 @@ def generate_report(results, stamp, report_dir):
 
     # Per-level breakdowns for stratified lanes
     for r in results:
-        if r["lane"] not in ("ladder", "n_pressure"):
+        if r["lane"] not in ("ladder", "n_pressure", "canonical"):
             continue
         rd = r["run_dir"]
         try:
@@ -320,7 +322,8 @@ def generate_report(results, stamp, report_dir):
             for p in preds:
                 level = p["id"].split("-")[1] if "-" in p["id"] else "?"
                 levels.setdefault(level, []).append(p)
-            title = "Ladder" if r["lane"] == "ladder" else "N-Pressure"
+            titles = {"ladder": "Ladder", "n_pressure": "N-Pressure", "canonical": "Canonical (N=2 + L4)"}
+            title = titles.get(r["lane"], r["lane"])
             lines.extend(["", f"### {title} Per-Level Breakdown", ""])
             lines.append("| Level | Anchors | Valid | Fmt-Inv | Resolve-Inv | Fab Rate | Zero-Anchor | Evasion | Abstain |")
             lines.append("|-------|---------|-------|---------|-------------|----------|-------------|---------|---------|")
@@ -422,7 +425,17 @@ def main():
         else:
             print(f"\nSkipping n_pressure lane: {corpus} not found")
 
-    # --- Lane 5: Sweep ---
+    # --- Lane 5: Canonical (N=2 + L4 regression) ---
+    if "canonical" in lanes and detector:
+        corpus = corpora.get("canonical")
+        if corpus and Path(corpus).exists():
+            rd = run_lane(detector, config, "canonical", corpus,
+                          args.profile, "canonical_nightly", results)
+            new_run_dirs.append(rd)
+        else:
+            print(f"\nSkipping canonical lane: {corpus} not found")
+
+    # --- Lane 6: Sweep ---
     if "sweep" in lanes and detector:
         original_temp_base = config.temperature_base
         original_temp_step = config.temperature_step
