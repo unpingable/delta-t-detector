@@ -312,16 +312,65 @@ class EpistemicGroundingTest:
     """
 
     _USER_AGENT = 'DeltaT-Detector/1.0'
+    _CACHE_PATH = '.resolver_cache.json'
 
     def __init__(
         self,
         max_fabricated: int = 0,
         validate_urls: bool = True,
-        timeout: int = 5
+        timeout: int = 5,
+        use_cache: bool = True,
     ):
         self.max_fabricated = max_fabricated
         self.validate_urls_enabled = validate_urls
         self.timeout = timeout
+        self.use_cache = use_cache
+        self._cache: Dict[str, Tuple[bool, str]] = {}
+        if use_cache:
+            self._load_cache()
+
+    def _load_cache(self):
+        """Load on-disk resolver cache."""
+        import json
+        try:
+            with open(self._CACHE_PATH, 'r') as f:
+                raw = json.load(f)
+            # Only cache definitive results (not errors/timeouts)
+            for k, v in raw.items():
+                if isinstance(v, list) and len(v) == 2:
+                    self._cache[k] = (v[0], v[1])
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    def _save_cache(self):
+        """Persist resolver cache to disk."""
+        import json
+        try:
+            with open(self._CACHE_PATH, 'w') as f:
+                json.dump({k: list(v) for k, v in self._cache.items()}, f)
+        except Exception:
+            pass
+
+    def _is_definitive(self, reason: str) -> bool:
+        """Is this a definitive result we should cache? (not timeout/error)"""
+        if self._is_resolver_error(reason):
+            return False
+        if reason.startswith("HTTP "):
+            return True  # Any HTTP status is definitive
+        if reason in ("invalid DOI format", "invalid arXiv format"):
+            return True
+        return False
+
+    def _is_resolver_error(self, reason: str) -> bool:
+        """Is this a resolver error (timeout, rate-limit, connection)?"""
+        lower = reason.lower()
+        if "timeout" in lower:
+            return True
+        if "429" in reason or "rate" in lower:
+            return True
+        if any(x in lower for x in ("connection", "refused", "reset", "dns")):
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # URL validation (aiohttp fast-path, requests fallback)
@@ -375,6 +424,17 @@ class EpistemicGroundingTest:
         if not urls:
             return {}
 
+        results = {}
+        uncached = []
+        for url in urls:
+            if url in self._cache:
+                results[url] = self._cache[url]
+            else:
+                uncached.append(url)
+
+        if not uncached:
+            return results
+
         # Try aiohttp fast-path
         if aiohttp is not None:
             try:
@@ -382,13 +442,18 @@ class EpistemicGroundingTest:
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-            return loop.run_until_complete(self._validate_urls_async(urls))
+            network = loop.run_until_complete(self._validate_urls_async(uncached))
+        else:
+            network = {}
+            for url in uncached:
+                valid, reason = self._head_requests(url)
+                network[url] = (valid, reason)
 
-        # Fallback: synchronous requests
-        results = {}
-        for url in urls:
-            valid, reason = self._head_requests(url)
+        for url, (valid, reason) in network.items():
+            if self._is_definitive(reason):
+                self._cache[url] = (valid, reason)
             results[url] = (valid, reason)
+
         return results
 
     # ------------------------------------------------------------------
@@ -418,25 +483,41 @@ class EpistemicGroundingTest:
     # ------------------------------------------------------------------
 
     def validate_doi(self, doi: str) -> Tuple[bool, str]:
-        """Validate a DOI — format check first, then network."""
+        """Validate a DOI — cache, format check, then network."""
         if not self._valid_doi_format(doi):
             return False, "invalid DOI format"
+        cache_key = f"doi:{doi}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         url = f"https://doi.org/{doi}"
         results = self.validate_urls([url])
-        return results.get(url, (False, "not checked"))
+        result = results.get(url, (False, "not checked"))
+        if self._is_definitive(result[1]):
+            self._cache[cache_key] = result
+        return result
 
     def validate_rfc(self, rfc_number: str) -> Tuple[bool, str]:
-        """Validate an RFC by checking rfc-editor.org"""
+        """Validate an RFC — cache first, then rfc-editor.org."""
+        cache_key = f"rfc:{rfc_number}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         url = f"https://www.rfc-editor.org/rfc/rfc{rfc_number}"
         valid, reason = self._head_requests(url)
+        if self._is_definitive(reason):
+            self._cache[cache_key] = (valid, reason)
         return valid, reason
 
     def validate_arxiv(self, arxiv_id: str) -> Tuple[bool, str]:
-        """Validate an arXiv paper — format check first, then network."""
+        """Validate an arXiv paper — cache, format check, then network."""
         if not self._valid_arxiv_format(arxiv_id):
             return False, "invalid arXiv format"
+        cache_key = f"arxiv:{arxiv_id}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         url = f"https://arxiv.org/abs/{arxiv_id}"
         valid, reason = self._head_requests(url)
+        if self._is_definitive(reason):
+            self._cache[cache_key] = (valid, reason)
         return valid, reason
 
     # ------------------------------------------------------------------
@@ -561,6 +642,7 @@ class EpistemicGroundingTest:
         def _record(key, valid, reason, resolver):
             nonlocal valid_count, invalid_count, format_invalid, resolve_invalid
             from datetime import datetime, timezone
+            is_error = self._is_resolver_error(reason)
             validation_results[key] = {
                 'valid': valid,
                 'reason': reason,
@@ -568,7 +650,10 @@ class EpistemicGroundingTest:
                 'response_class': _response_class(reason),
                 'timestamp': datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
             }
-            if valid:
+            if is_error:
+                # Resolver error — don't penalize, don't credit
+                validation_results[key]['resolver_error'] = True
+            elif valid:
                 valid_count += 1
             else:
                 invalid_count += 1
@@ -598,6 +683,9 @@ class EpistemicGroundingTest:
             for arxiv_id in citations.get('arxiv', []):
                 valid, reason = self.validate_arxiv(arxiv_id)
                 _record(f"arxiv:{arxiv_id}", valid, reason, "arxiv.org")
+            # Persist cache after all validations
+            if self.use_cache:
+                self._save_cache()
         else:
             valid_count = total_citations
 

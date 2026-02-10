@@ -30,3 +30,4 @@ runs/
 logs/
 reports/
 *.tar.gz
+.resolver_cache.json

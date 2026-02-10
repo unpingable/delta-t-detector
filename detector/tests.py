@@ -926,6 +926,108 @@ class TestInvariants:
         assert aggregated.prediction == 'FAIL'
         assert aggregated.fail_type == 'MISMATCHED_CITATION'
 
+    # --- Resolver cache tests ---
+
+    def test_resolver_cache_skips_network_on_hit(self):
+        """Cache hit skips network call entirely"""
+        test = EpistemicGroundingTest(max_fabricated=0, use_cache=False)
+        # Pre-populate cache manually
+        test._cache["doi:10.1234/cached"] = (True, "HTTP 200")
+        # validate_doi should return cached result without network
+        valid, reason = test.validate_doi("10.1234/cached")
+        assert valid is True
+        assert reason == "HTTP 200"
+
+    def test_resolver_cache_stores_definitive(self):
+        """Definitive results are cached after network lookup"""
+        test = EpistemicGroundingTest(max_fabricated=0, use_cache=False)
+        # Mock network to return definitive 404
+        def fake_head(url):
+            return False, "HTTP 404"
+        test._head_requests = fake_head
+        valid, reason = test.validate_arxiv("2301.12345")
+        assert valid is False
+        assert "arxiv:2301.12345" in test._cache
+        assert test._cache["arxiv:2301.12345"] == (False, "HTTP 404")
+
+    def test_resolver_cache_skips_errors(self):
+        """Resolver errors (timeout, rate-limit) are NOT cached"""
+        test = EpistemicGroundingTest(max_fabricated=0, use_cache=False)
+        def fake_head(url):
+            return False, "timeout after 5s"
+        test._head_requests = fake_head
+        valid, reason = test.validate_arxiv("2301.99999")
+        assert "arxiv:2301.99999" not in test._cache
+
+    def test_resolver_cache_roundtrip(self):
+        """Cache save/load roundtrip preserves data"""
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, ".resolver_cache.json")
+            test1 = EpistemicGroundingTest(use_cache=False)
+            test1._CACHE_PATH = cache_path
+            test1._cache["doi:10.1234/test"] = (True, "HTTP 200")
+            test1._cache["arxiv:2301.00001"] = (False, "HTTP 404")
+            test1._save_cache()
+
+            test2 = EpistemicGroundingTest(use_cache=False)
+            test2._CACHE_PATH = cache_path
+            test2._load_cache()
+            assert test2._cache["doi:10.1234/test"] == (True, "HTTP 200")
+            assert test2._cache["arxiv:2301.00001"] == (False, "HTTP 404")
+
+    # --- Resolver error classification tests ---
+
+    def test_resolver_error_not_counted_as_invalid(self):
+        """Resolver errors (timeout) should not increment invalid_count"""
+        test = EpistemicGroundingTest(max_fabricated=0)
+        test.validate_urls_enabled = True
+        def fake_validate_doi(doi):
+            return False, "timeout after 5s"
+        test.validate_doi = fake_validate_doi
+        fake_citations = {
+            'dois': ['10.1234/maybe-real'],
+            'urls': [], 'rfcs': [], 'arxiv': [], 'pmids': [], 'isbns': []
+        }
+        with patch('detector.invariants.extract_citations', return_value=fake_citations):
+            with patch('detector.invariants.count_citations', return_value=1):
+                result = test.test("fake text", validate=True)
+        # Should not be counted as invalid
+        assert result.details['invalid_count'] == 0
+        assert result.details['valid_count'] == 0
+        # Should not trigger violation
+        assert not result.violated
+        vr = result.details['validation_results']['doi:10.1234/maybe-real']
+        assert vr['resolver_error'] is True
+        assert vr['response_class'] == 'timeout'
+
+    def test_resolver_error_rate_limit_not_invalid(self):
+        """HTTP 429 (rate limit) should not count as invalid"""
+        test = EpistemicGroundingTest(max_fabricated=0)
+        test.validate_urls_enabled = True
+        def fake_validate_doi(doi):
+            return False, "HTTP 429"
+        test.validate_doi = fake_validate_doi
+        fake_citations = {
+            'dois': ['10.1234/rate-limited'],
+            'urls': [], 'rfcs': [], 'arxiv': [], 'pmids': [], 'isbns': []
+        }
+        with patch('detector.invariants.extract_citations', return_value=fake_citations):
+            with patch('detector.invariants.count_citations', return_value=1):
+                result = test.test("fake text", validate=True)
+        assert result.details['invalid_count'] == 0
+        assert not result.violated
+
+    def test_is_definitive_excludes_resolver_errors(self):
+        """_is_definitive returns False for timeouts, rate-limits, connection errors"""
+        test = EpistemicGroundingTest()
+        assert not test._is_definitive("timeout after 5s")
+        assert not test._is_definitive("HTTP 429")
+        assert not test._is_definitive("connection refused")
+        assert test._is_definitive("HTTP 200")
+        assert test._is_definitive("HTTP 404")
+        assert test._is_definitive("invalid DOI format")
+
 
 # ============================================================================
 # Reporting Tests
