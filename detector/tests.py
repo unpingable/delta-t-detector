@@ -1863,6 +1863,50 @@ class TestCouplingTopology:
         assert prov["introduced_new_citations"] is False
         assert prov["novel_anchors"] == []
 
+    def test_parse_hub_choice_extracts_b(self):
+        """parse_hub_choice extracts B from 'CHOOSE: B'"""
+        from scripts.coupling import parse_hub_choice
+        assert parse_hub_choice("CHOOSE: B") == "B"
+        assert parse_hub_choice("CHOOSE: B\nB is better because...") == "B"
+        assert parse_hub_choice("I think CHOOSE: B is right") == "B"
+
+    def test_parse_hub_choice_extracts_c(self):
+        """parse_hub_choice extracts C from 'CHOOSE: C'"""
+        from scripts.coupling import parse_hub_choice
+        assert parse_hub_choice("CHOOSE: C") == "C"
+        assert parse_hub_choice("choose: c") == "C"  # case-insensitive
+
+    def test_parse_hub_choice_returns_none_for_garbage(self):
+        """parse_hub_choice returns None for unparseable output"""
+        from scripts.coupling import parse_hub_choice
+        assert parse_hub_choice("I pick assistant B") is None
+        assert parse_hub_choice("Both are good") is None
+        assert parse_hub_choice("") is None
+
+    def test_enforce_hub_provenance_strips_novel(self):
+        """enforce_hub_provenance strips lines with novel anchors, keeps clean ones"""
+        from scripts.coupling import enforce_hub_provenance
+        resp_b = "See DOI: 10.1234/paper-b for details."
+        resp_c = "Reference arXiv:2301.12345 covers this."
+        # A keeps B's DOI but adds a novel one on a separate line
+        resp_a = (
+            "ANSWER: Here is the synthesis.\n"
+            "CITATIONS:\n"
+            "- DOI: 10.1234/paper-b\n"
+            "- DOI: 10.5678/invented\n"
+            "CLAIMS:\n"
+            "- Claim supported by DOI: 10.1234/paper-b"
+        )
+        cleaned, prov = enforce_hub_provenance(resp_a, resp_b, resp_c)
+        # Novel anchor line removed
+        assert "10.5678/invented" not in cleaned
+        # Clean anchor preserved
+        assert "10.1234/paper-b" in cleaned
+        # Provenance metadata
+        assert prov["enforced"] is True
+        assert prov["lines_removed"] == 1
+        assert prov["introduced_new_citations"] is True
+
     def test_score_final_eg_only(self):
         """score_final uses EG only, not TC/SC"""
         from scripts.coupling import score_final

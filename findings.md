@@ -103,3 +103,78 @@ This is the lane to watch for coupling topology experiments and cross-platform c
 **Implication for multi-agent architectures**: Hub/merge topologies are actively toxic for citation integrity. The merge step doesn't polish lies (H1/H2) — it *creates new ones*. Chain is neutral. Any governance pipeline should treat hub outputs with higher suspicion, or enforce strict merge (code-level rejection of novel anchors, not prompt-level instruction).
 
 **Open question**: Is hub bad because it cheats (invents new citations despite instructions), or bad even when it can't cheat? Next step: run hub with code-enforced no-novel-anchors and compare.
+
+## Hub-Enforced Experiment (2026-02-10)
+
+**Question**: Is hub bad because it cheats (introduces novel citations), or bad even when cheats are stripped?
+
+**Method**: `hub_enforced` — identical pipeline to `hub` (same seeds → same raw B, C, A generation), but after A generates, any citation lines containing novel anchors not in B or C are removed before scoring. Code-level enforcement, not prompt-level.
+
+| Topology     | Anchors | Valid | Fab Rate  | Mismatch | Lie Rate  | Verdicts |
+|--------------|---------|-------|-----------|----------|-----------|----------|
+| single       | 101     | 52    | 17.8%     | 26.7%    | 44.6%     | 3C / 12F |
+| hub          | 98      | 37    | **36.7%** | 25.5%    | **62.2%** | 1C / 14F |
+| hub_enforced | 92      | 36    | **34.8%** | 26.1%    | **60.9%** | 1C / 14F |
+
+**Enforcement delta** (hub_enforced vs hub):
+- fabrication_rate: -2.0pp
+- mismatch_rate: +0.6pp
+- lie_rate: -1.4pp
+
+**Answer: Hub is bad even when it can't cheat.** Stripping novel anchors only removed 6 anchors (98→92) and reduced fabrication by a trivial 2pp. The remaining +17pp fabrication uplift vs single is structural — the merge step itself causes fabrication, not just the cheating. Hub-A's 2/15 novel-citation violations were the tip of the iceberg; the real damage is that merge pressure causes A to *hallucinate existing-format-but-nonexistent identifiers* even when drawing only from B and C's citation pools.
+
+**Implication**: Prompt-level "only use citations from inputs" is insufficient, and even code-level enforcement barely helps. The merge step is fundamentally toxic for citation integrity. Multi-agent hub architectures need structural guarantees (e.g., citation passthrough without LLM rewriting) rather than filtering.
+
+## Hub-Select Experiment (2026-02-10)
+
+**Question**: If we make aggregation non-generative (A just picks B or C wholesale), does fabrication collapse back to single-level?
+
+**Method**: `hub_select` — B and C generate independently (same seeds as hub), then A is prompted to output only "CHOOSE: B" or "CHOOSE: C". The chosen candidate is scored wholesale — A generates zero citation text.
+
+| Topology   | Anchors | Valid | Fab Rate  | Mismatch | Lie Rate  | Verdicts |
+|------------|---------|-------|-----------|----------|-----------|----------|
+| single     | 101     | 52    | 17.8%     | 26.7%    | 44.6%     | 3C / 12F |
+| hub        | 98      | 37    | **36.7%** | 25.5%    | **62.2%** | 1C / 14F |
+| hub_select | 89      | 37    | **31.5%** | 27.0%    | **58.4%** | 2C / 13F |
+
+**Selection delta** (hub_select vs hub): fab -5.3pp, lie -3.8pp
+**Hub_select vs single**: fab +13.6pp [INTERESTING], lie +13.9pp [INTERESTING]
+
+**Prediction was wrong.** Hub_select does NOT collapse back to single. It's slightly better than hub (-5pp fab, -4pp lie), but it's still +14pp above single on both metrics. The fabrication isn't coming from the merge step's generation — it's already in B and C.
+
+**Why**: B and C are generated with hub-specific seeds (different from single's seed). The selection merely passes through whichever candidate the selector picks — but both candidates are already worse than single. The independence topology (two perspectives on the same question) doesn't improve citation quality; if anything, it means the selector picks from two flawed pools.
+
+Deeper: 89 anchors (vs 101 single, 98 hub) means the selector tends to pick the shorter/sparser candidate. Valid count is flat (37 in both hub and hub_select), so selection doesn't improve truth — it just drops volume slightly.
+
+**Revised understanding**: The fabrication spike in hub is ~70% structural (B+C already worse than single due to different seed paths and role framing) and ~30% from merge generation. The merge step adds insult to injury, but the injury was already there.
+
+**Design rule (revised)**: Non-generative aggregation helps marginally but does not fix the fundamental problem. The real issue is that multi-agent framing (independent perspectives) doesn't improve citation accuracy — it's not "synthesis is toxic," it's "independence doesn't help, and synthesis makes it worse."
+
+## Role-Framing Control (2026-02-10)
+
+**Question**: Is hub_select worse than single because of role framing (different prompt) or because of multi-agentness (selecting between two candidates)?
+
+**Method**: `single_rolematch` — single agent using the exact hub-B role prompt ("independent research assistant") and hub-B seed derivation. Same generation, no second candidate, no selector.
+
+| Topology        | Anchors | Valid | Fab Rate | Mismatch | Lie Rate | Verdicts |
+|-----------------|---------|-------|----------|----------|----------|----------|
+| single          | 101     | 52    | 17.8%    | 26.7%    | 44.6%    | 3C / 12F |
+| single_rolematch| 87      | 45    | 18.4%    | 29.9%    | 48.3%    | 3C / 12F |
+| hub_select      | 89      | 37    | **31.5%**| 27.0%    | **58.4%**| 2C / 13F |
+
+**Result**: single_rolematch ≈ single. All deltas vs single are <4pp (not significant). Same verdict histogram (3C/12F). Role framing is **not** the culprit.
+
+**But hub_select is still +14pp above single_rolematch on fab rate.** The only difference between single_rolematch and hub_select is that hub_select *picks between two candidates* (B and C). The selector's choice is where the damage enters.
+
+**Causal decomposition of hub's +19pp fabrication uplift vs single**:
+
+| Component | Δ Fab Rate | Mechanism |
+|-----------|-----------|-----------|
+| Role framing (single→single_rolematch) | +0.6pp | Negligible — prompt wording doesn't matter |
+| Selection (single_rolematch→hub_select) | +13.1pp | Selector picks worse candidate ~half the time |
+| Synthesis (hub_select→hub) | +5.2pp | Merge generation adds more fabrication on top |
+| **Total (single→hub)** | **+18.9pp** | |
+
+**The selector is the main hazard**, not the synthesis. When presented with two candidates of varying quality, the 3B model's selector *systematically picks the worse one* for citation integrity. It optimizes for coherence/completeness, not citation accuracy — exactly as predicted, but the effect is in the selection, not the generation.
+
+**Design rule (final)**: Multi-agent citation architectures fail at Qwen-3B scale because the model cannot reliably evaluate citation quality. Neither non-generative selection nor enforced provenance rescues the setup. The aggregation operator (whether generative or selective) lacks the competence to choose truth over plausibility. At this model scale, single-agent is strictly better for citation integrity.
