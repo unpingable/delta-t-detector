@@ -50,6 +50,7 @@ class DetectionResult:
     report: Optional[DetectionReport] = None
     fail_type: Optional[str] = None
     fail_subjects: Optional[list] = None
+    warn_type: Optional[str] = None
 
 
 class DeltaTDetector:
@@ -603,7 +604,8 @@ class DeltaTDetector:
         prompt: str,
         validate_citations: bool = True,
         test_semantic: bool = True,
-        test_irreversibility: bool = False
+        test_irreversibility: bool = False,
+        expected_min_anchors: Optional[int] = None,
     ) -> DetectionResult:
         """
         Full multi-invariant detection
@@ -674,7 +676,8 @@ class DeltaTDetector:
             results['irreversibility'] = self.irreversibility_test.test(responses)
         
         # Aggregate results
-        multi_result = self.multi_invariant_validator.aggregate(results)
+        multi_result = self.multi_invariant_validator.aggregate(
+            results, expected_min_anchors=expected_min_anchors)
         
         # Compute temporal debt
         debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights, baseline=self._current_baseline)
@@ -716,6 +719,7 @@ class DeltaTDetector:
             report=report,
             fail_type=multi_result.fail_type,
             fail_subjects=multi_result.fail_subjects,
+            warn_type=multi_result.warn_type,
         )
 
     # =========================================================================

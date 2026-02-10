@@ -49,6 +49,7 @@ class MultiInvariantResult:
     confidence: float
     fail_type: Optional[str] = None       # 'FABRICATED_IDENTIFIER' or None
     fail_subjects: Optional[List[str]] = None  # e.g. ['doi:10.xxxx', 'arxiv:2501.00000']
+    warn_type: Optional[str] = None      # 'NEED_EVIDENCE' or None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -480,9 +481,31 @@ class EpistemicGroundingTest:
 
         _FORMAT_REASONS = {"invalid DOI format", "invalid arXiv format"}
 
-        def _record(key, valid, reason):
+        def _response_class(reason: str) -> str:
+            if reason in _FORMAT_REASONS:
+                return "format_rejected"
+            if "HTTP 200" in reason or "HTTP 301" in reason or "HTTP 302" in reason:
+                return "found"
+            if "HTTP 404" in reason:
+                return "not_found"
+            if "HTTP 403" in reason or "HTTP 401" in reason:
+                return "found"  # exists but access restricted
+            if "timeout" in reason.lower():
+                return "timeout"
+            if "HTTP" in reason:
+                return "not_found"
+            return "error"
+
+        def _record(key, valid, reason, resolver):
             nonlocal valid_count, invalid_count, format_invalid, resolve_invalid
-            validation_results[key] = {'valid': valid, 'reason': reason}
+            from datetime import datetime, timezone
+            validation_results[key] = {
+                'valid': valid,
+                'reason': reason,
+                'resolver': resolver,
+                'response_class': _response_class(reason),
+                'timestamp': datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+            }
             if valid:
                 valid_count += 1
             else:
@@ -497,22 +520,22 @@ class EpistemicGroundingTest:
             if citations['urls']:
                 url_results = self.validate_urls(citations['urls'])
                 for url, (valid, reason) in url_results.items():
-                    _record(url, valid, reason)
+                    _record(url, valid, reason, "HEAD")
 
             # DOIs
             for doi in citations['dois']:
                 valid, reason = self.validate_doi(doi)
-                _record(f"doi:{doi}", valid, reason)
+                _record(f"doi:{doi}", valid, reason, "doi.org")
 
             # RFCs
             for rfc in citations.get('rfcs', []):
                 valid, reason = self.validate_rfc(rfc)
-                _record(f"rfc:{rfc}", valid, reason)
+                _record(f"rfc:{rfc}", valid, reason, "rfc-editor.org")
 
             # arXiv
             for arxiv_id in citations.get('arxiv', []):
                 valid, reason = self.validate_arxiv(arxiv_id)
-                _record(f"arxiv:{arxiv_id}", valid, reason)
+                _record(f"arxiv:{arxiv_id}", valid, reason, "arxiv.org")
         else:
             valid_count = total_citations
 
@@ -656,7 +679,8 @@ class MultiInvariantValidator:
     
     def aggregate(
         self,
-        results: Dict[str, InvariantResult]
+        results: Dict[str, InvariantResult],
+        expected_min_anchors: Optional[int] = None,
     ) -> MultiInvariantResult:
         """
         Aggregate invariant results into final prediction.
@@ -664,6 +688,7 @@ class MultiInvariantValidator:
         Decision rule:
           - EG (epistemic_grounding) violation with invalid anchors → FAIL
             (fail_type=FABRICATED_IDENTIFIER)
+          - anchors_found < expected_min_anchors → WARN (warn_type=NEED_EVIDENCE)
           - SC/TC violations without EG → WARN only (demoted from gating)
           - No violations → CLEAN
 
@@ -695,10 +720,20 @@ class MultiInvariantValidator:
             if fail_subjects:
                 fail_type = 'FABRICATED_IDENTIFIER'
 
+        # Check evasion: anchors below expected minimum
+        warn_type = None
+        anchors_found = 0
+        if eg is not None:
+            anchors_found = eg.details.get('total_citations', 0)
+
         # Decision rule
         if eg_violated:
             prediction = 'FAIL'
             confidence = min(0.95, 0.6 + 0.1 * len(fail_subjects))
+        elif expected_min_anchors is not None and anchors_found < expected_min_anchors:
+            prediction = 'WARN'
+            warn_type = 'NEED_EVIDENCE'
+            confidence = 0.6
         elif n_violated > 0:
             prediction = 'WARN'
             confidence = min(0.85, 0.5 + 0.1 * n_violated)
@@ -714,4 +749,5 @@ class MultiInvariantValidator:
             confidence=confidence,
             fail_type=fail_type,
             fail_subjects=fail_subjects if fail_subjects else None,
+            warn_type=warn_type,
         )

@@ -115,7 +115,9 @@ def run_eval(
 
     for item in load_jsonl(jsonl_path):
         if multi_invariant:
-            result = detector.detect_multi_invariant(item.prompt, test_semantic=True)
+            result = detector.detect_multi_invariant(
+                item.prompt, test_semantic=True,
+                expected_min_anchors=item.expected_min_anchors)
         else:
             result = detector.detect(item.prompt, generate_report=False)
         features = result.features or {}
@@ -189,6 +191,7 @@ def run_eval(
                 aggregate_score=aggregate_score,
                 fail_type=getattr(result, 'fail_type', None),
                 fail_subjects=getattr(result, 'fail_subjects', None),
+                warn_type=getattr(result, 'warn_type', None),
                 expected_min_anchors=item.expected_min_anchors,
             ))
 

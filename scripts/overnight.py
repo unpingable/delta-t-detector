@@ -6,9 +6,10 @@ Lanes:
   0. Canary    — tiny corpus, fast, catches regressions (~5 min)
   1. Baseline  — full v3 corpus, default config (~25 min)
   2. Citations — citation-forcing corpus, exercises Inv-3 (~15 min)
-  3. Ladder    — citation ladder L1-L5, 50 prompts (~25 min)
-  4. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
-  5. Replay    — CPU-only threshold scan on all new runs (minutes)
+  3. Ladder    — citation ladder L1-L6, 60 prompts (~30 min)
+  4. N-Pressure — N=1,2,3,5 citation pressure curve (~10 min)
+  5. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
+  6. Replay    — CPU-only threshold scan on all new runs (minutes)
 
 Usage:
     bin/overnight.sh                    # full suite
@@ -40,6 +41,7 @@ CORPORA = {
     "baseline": "data/eval_seed_v3.jsonl",
     "citations": "data/citation_forcing_30.jsonl",
     "ladder": "data/citation_ladder_60.jsonl",
+    "n_pressure": "data/n_pressure_20.jsonl",
 }
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEVICE = "cuda"
@@ -49,7 +51,7 @@ PROFILE_NAME = "general"
 TEMP_GRID = [0.5, 0.7, 0.9]
 NPERTURB_GRID = [3, 5]
 
-ALL_LANES = ["canary", "baseline", "citations", "ladder", "sweep", "replay"]
+ALL_LANES = ["canary", "baseline", "citations", "ladder", "n_pressure", "sweep", "replay"]
 
 
 def run_one_eval(detector, corpus_path, profile_name, label=""):
@@ -61,7 +63,9 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
 
     for item in load_jsonl(corpus_path):
         n_items += 1
-        result = detector.detect_multi_invariant(item.prompt, test_semantic=True)
+        result = detector.detect_multi_invariant(
+            item.prompt, test_semantic=True,
+            expected_min_anchors=item.expected_min_anchors)
         features = result.features or {}
         anomaly_score = None
         flags = compute_guard_flags(
@@ -100,6 +104,7 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
             aggregate_score=aggregate_score,
             fail_type=getattr(result, 'fail_type', None),
             fail_subjects=getattr(result, 'fail_subjects', None),
+            warn_type=getattr(result, 'warn_type', None),
             expected_min_anchors=item.expected_min_anchors,
         ))
 
@@ -304,9 +309,9 @@ def generate_report(results, stamp, report_dir):
         except Exception as e:
             lines.append(f"| {r['lane']} | ? | ? | ? | ? | ? | ? | ? | ? |")
 
-    # Per-level breakdown for ladder
+    # Per-level breakdowns for stratified lanes
     for r in results:
-        if r["lane"] != "ladder":
+        if r["lane"] not in ("ladder", "n_pressure"):
             continue
         rd = r["run_dir"]
         try:
@@ -315,7 +320,8 @@ def generate_report(results, stamp, report_dir):
             for p in preds:
                 level = p["id"].split("-")[1] if "-" in p["id"] else "?"
                 levels.setdefault(level, []).append(p)
-            lines.extend(["", "### Ladder Per-Level Breakdown", ""])
+            title = "Ladder" if r["lane"] == "ladder" else "N-Pressure"
+            lines.extend(["", f"### {title} Per-Level Breakdown", ""])
             lines.append("| Level | Anchors | Valid | Fmt-Inv | Resolve-Inv | Fab Rate | Zero-Anchor | Evasion | Abstain |")
             lines.append("|-------|---------|-------|---------|-------------|----------|-------------|---------|---------|")
             for level in sorted(levels):
@@ -406,7 +412,17 @@ def main():
         else:
             print(f"\nSkipping ladder lane: {corpus} not found")
 
-    # --- Lane 4: Sweep ---
+    # --- Lane 4: N-Pressure ---
+    if "n_pressure" in lanes and detector:
+        corpus = corpora.get("n_pressure")
+        if corpus and Path(corpus).exists():
+            rd = run_lane(detector, config, "n_pressure", corpus,
+                          args.profile, "n_pressure_nightly", results)
+            new_run_dirs.append(rd)
+        else:
+            print(f"\nSkipping n_pressure lane: {corpus} not found")
+
+    # --- Lane 5: Sweep ---
     if "sweep" in lanes and detector:
         original_temp_base = config.temperature_base
         original_temp_step = config.temperature_step

@@ -815,6 +815,79 @@ class TestInvariants:
         assert items[0].expected_min_anchors == 3
         assert items[1].expected_min_anchors is None
 
+    def test_need_evidence_warn_on_evasion(self):
+        """NEED_EVIDENCE WARN when anchors < expected_min_anchors"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.5, violated=False,
+                details={'total_citations': 0, 'note': 'No citations found'}
+            ),
+            'semantic_conservation': InvariantResult(
+                name='semantic_conservation', score=0.8, violated=False, details={}
+            ),
+        }
+        aggregated = validator.aggregate(results, expected_min_anchors=3)
+        assert aggregated.prediction == 'WARN'
+        assert aggregated.warn_type == 'NEED_EVIDENCE'
+
+    def test_no_need_evidence_when_anchors_sufficient(self):
+        """No NEED_EVIDENCE when anchors >= expected_min"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.8, violated=False,
+                details={'total_citations': 3, 'valid_count': 3, 'invalid_count': 0}
+            ),
+            'semantic_conservation': InvariantResult(
+                name='semantic_conservation', score=0.8, violated=False, details={}
+            ),
+        }
+        aggregated = validator.aggregate(results, expected_min_anchors=3)
+        assert aggregated.prediction == 'CLEAN'
+        assert aggregated.warn_type is None
+
+    def test_need_evidence_does_not_override_fail(self):
+        """FAIL from EG takes precedence over NEED_EVIDENCE"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.1, violated=True,
+                details={
+                    'total_citations': 1,
+                    'validation_results': {
+                        'doi:10.9999/fake': {'valid': False, 'reason': '404'},
+                    }
+                }
+            ),
+        }
+        # expected 3 but only got 1 — but it's also fabricated → FAIL wins
+        aggregated = validator.aggregate(results, expected_min_anchors=3)
+        assert aggregated.prediction == 'FAIL'
+        assert aggregated.fail_type == 'FABRICATED_IDENTIFIER'
+
+    def test_resolver_metadata_in_validation_results(self):
+        """Resolver metadata (resolver, response_class, timestamp) in EG details"""
+        test = EpistemicGroundingTest(max_fabricated=0)
+        test.validate_urls_enabled = True
+        # Monkeypatch to avoid network
+        def fake_validate_doi(doi):
+            return False, "HTTP 404"
+        test.validate_doi = fake_validate_doi
+        from unittest.mock import patch
+        fake_citations = {
+            'dois': ['10.1234/fake.test'],
+            'urls': [], 'rfcs': [], 'arxiv': [], 'pmids': [], 'isbns': []
+        }
+        with patch('detector.invariants.extract_citations', return_value=fake_citations):
+            with patch('detector.invariants.count_citations', return_value=1):
+                result = test.test("fake text", validate=True)
+        vr = result.details['validation_results']
+        entry = vr['doi:10.1234/fake.test']
+        assert entry['resolver'] == 'doi.org'
+        assert entry['response_class'] == 'not_found'
+        assert 'timestamp' in entry
+
 
 # ============================================================================
 # Reporting Tests

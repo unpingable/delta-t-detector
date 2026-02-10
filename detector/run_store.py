@@ -98,6 +98,7 @@ class PredictionRecord:
     fail_type: Optional[str] = None          # 'FABRICATED_IDENTIFIER' or None
     fail_subjects: Optional[List[str]] = None  # e.g. ['doi:10.xxxx']
     # Evasion tracking
+    warn_type: Optional[str] = None           # 'NEED_EVIDENCE' or None
     expected_min_anchors: Optional[int] = None
 
 
