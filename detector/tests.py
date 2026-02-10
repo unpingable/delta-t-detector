@@ -592,7 +592,7 @@ class TestInvariants:
         assert result.violated
     
     def test_multi_invariant_aggregation(self):
-        """Test multi-invariant aggregation"""
+        """Test multi-invariant aggregation: EG violated → FAIL"""
         validator = MultiInvariantValidator(min_invariants_required=2)
 
         results = {
@@ -621,7 +621,7 @@ class TestInvariants:
         assert aggregated.prediction == 'FAIL'
 
     def test_multi_invariant_warn_tier(self):
-        """Test WARN tier: 1 violation < min_invariants_required"""
+        """Test WARN tier: TC violated alone → WARN (demoted from gating)"""
         validator = MultiInvariantValidator(min_invariants_required=2)
         results = {
             'temporal_coherence': InvariantResult(
@@ -649,6 +649,129 @@ class TestInvariants:
         aggregated = validator.aggregate(results)
         assert aggregated.n_violated == 0
         assert aggregated.prediction == 'CLEAN'
+
+    def test_sc_tc_alone_cannot_fail(self):
+        """SC + TC violated together → WARN, never FAIL (demoted from gating)"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'temporal_coherence': InvariantResult(
+                name='temporal_coherence', score=0.2, violated=True, details={}
+            ),
+            'semantic_conservation': InvariantResult(
+                name='semantic_conservation', score=0.3, violated=True, details={}
+            ),
+        }
+        aggregated = validator.aggregate(results)
+        assert aggregated.n_violated == 2
+        assert aggregated.prediction == 'WARN'
+        assert aggregated.fail_type is None
+        assert aggregated.fail_subjects is None
+
+    def test_eg_alone_triggers_fail(self):
+        """EG violated alone → FAIL even if SC/TC are clean"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'temporal_coherence': InvariantResult(
+                name='temporal_coherence', score=0.9, violated=False, details={}
+            ),
+            'semantic_conservation': InvariantResult(
+                name='semantic_conservation', score=0.8, violated=False, details={}
+            ),
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.1, violated=True,
+                details={
+                    'validation_results': {
+                        'doi:10.9999/fake.123': {'valid': False, 'reason': '404'},
+                    }
+                }
+            ),
+        }
+        aggregated = validator.aggregate(results)
+        assert aggregated.prediction == 'FAIL'
+        assert aggregated.fail_type == 'FABRICATED_IDENTIFIER'
+        assert aggregated.fail_subjects == ['doi:10.9999/fake.123']
+
+    def test_fail_subjects_multiple(self):
+        """Multiple invalid anchors all appear in fail_subjects"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.1, violated=True,
+                details={
+                    'validation_results': {
+                        'doi:10.1234/fake1': {'valid': False, 'reason': '404'},
+                        'doi:10.5678/fake2': {'valid': False, 'reason': '404'},
+                        'arxiv:2501.99999': {'valid': True},
+                    }
+                }
+            ),
+        }
+        aggregated = validator.aggregate(results)
+        assert aggregated.prediction == 'FAIL'
+        assert aggregated.fail_type == 'FABRICATED_IDENTIFIER'
+        assert len(aggregated.fail_subjects) == 2
+        assert 'doi:10.1234/fake1' in aggregated.fail_subjects
+        assert 'doi:10.5678/fake2' in aggregated.fail_subjects
+
+    def test_fail_confidence_scales_with_subjects(self):
+        """FAIL confidence scales with number of invalid anchors"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        # 1 invalid anchor
+        r1 = validator.aggregate({
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.1, violated=True,
+                details={'validation_results': {
+                    'doi:10.1/a': {'valid': False, 'reason': '404'},
+                }}
+            ),
+        })
+        # 3 invalid anchors
+        r3 = validator.aggregate({
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.1, violated=True,
+                details={'validation_results': {
+                    'doi:10.1/a': {'valid': False, 'reason': '404'},
+                    'doi:10.2/b': {'valid': False, 'reason': '404'},
+                    'doi:10.3/c': {'valid': False, 'reason': '404'},
+                }}
+            ),
+        })
+        assert r3.confidence > r1.confidence
+        assert r3.confidence <= 0.95  # capped
+
+    def test_valid_doi_format(self):
+        """DOI format validator accepts valid DOIs"""
+        from detector.invariants import EpistemicGroundingTest
+        assert EpistemicGroundingTest._valid_doi_format("10.1016/j.aiqw.2023.101059")
+        assert EpistemicGroundingTest._valid_doi_format("10.1109/TAC.2017.2718015")
+        assert EpistemicGroundingTest._valid_doi_format("10.48550/arXiv.2301.00001")
+
+    def test_invalid_doi_format(self):
+        """DOI format validator rejects bogus DOIs"""
+        from detector.invariants import EpistemicGroundingTest
+        assert not EpistemicGroundingTest._valid_doi_format("11.1234/x")  # wrong prefix
+        assert not EpistemicGroundingTest._valid_doi_format("10.12/x")   # registrant too short
+        assert not EpistemicGroundingTest._valid_doi_format("10.1234/")  # no suffix
+        assert not EpistemicGroundingTest._valid_doi_format("10.1234/x") # suffix too short
+
+    def test_repeated_doi_segments_rejected(self):
+        """DOI with repeated segments is rejected as likely hallucinated"""
+        from detector.invariants import EpistemicGroundingTest
+        assert not EpistemicGroundingTest._valid_doi_format("10.5592/10.5592/10.5592/10.5592")
+
+    def test_valid_arxiv_format(self):
+        """arXiv format validator accepts valid IDs"""
+        from detector.invariants import EpistemicGroundingTest
+        assert EpistemicGroundingTest._valid_arxiv_format("2301.00001")
+        assert EpistemicGroundingTest._valid_arxiv_format("2301.12345v2")
+        assert EpistemicGroundingTest._valid_arxiv_format("2501.00001")
+
+    def test_invalid_arxiv_format(self):
+        """arXiv format validator rejects bogus IDs"""
+        from detector.invariants import EpistemicGroundingTest
+        assert not EpistemicGroundingTest._valid_arxiv_format("230.001")   # too short
+        assert not EpistemicGroundingTest._valid_arxiv_format("abcd.12345")  # letters
+        assert not EpistemicGroundingTest._valid_arxiv_format("2301.123")   # suffix too short
 
 
 # ============================================================================

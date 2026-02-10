@@ -6,8 +6,9 @@ Lanes:
   0. Canary    — tiny corpus, fast, catches regressions (~5 min)
   1. Baseline  — full v3 corpus, default config (~25 min)
   2. Citations — citation-forcing corpus, exercises Inv-3 (~15 min)
-  3. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
-  4. Replay    — CPU-only threshold scan on all new runs (minutes)
+  3. Ladder    — citation ladder L1-L5, 50 prompts (~25 min)
+  4. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
+  5. Replay    — CPU-only threshold scan on all new runs (minutes)
 
 Usage:
     bin/overnight.sh                    # full suite
@@ -38,6 +39,7 @@ CORPORA = {
     "canary": "data/canary_10.jsonl",
     "baseline": "data/eval_seed_v3.jsonl",
     "citations": "data/citation_forcing_30.jsonl",
+    "ladder": "data/citation_ladder_50.jsonl",
 }
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEVICE = "cuda"
@@ -47,7 +49,7 @@ PROFILE_NAME = "general"
 TEMP_GRID = [0.5, 0.7, 0.9]
 NPERTURB_GRID = [3, 5]
 
-ALL_LANES = ["canary", "baseline", "citations", "sweep", "replay"]
+ALL_LANES = ["canary", "baseline", "citations", "ladder", "sweep", "replay"]
 
 
 def run_one_eval(detector, corpus_path, profile_name, label=""):
@@ -96,6 +98,8 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
             invariant_results=inv_results_dict,
             n_violated=n_violated,
             aggregate_score=aggregate_score,
+            fail_type=getattr(result, 'fail_type', None),
+            fail_subjects=getattr(result, 'fail_subjects', None),
         ))
 
         if n_items % 10 == 0:
@@ -234,7 +238,10 @@ def generate_report(results, stamp, report_dir):
             if fails:
                 lines.append(f"### {r['lane']} ({r['label']})")
                 for p in fails:
-                    lines.append(f"- **{p['id']}** [{p['expected_risk']}] n_violated={p.get('n_violated','?')}")
+                    ft = p.get('fail_type', '?')
+                    fs = p.get('fail_subjects') or []
+                    subj_str = ', '.join(fs[:3]) if fs else 'none'
+                    lines.append(f"- **{p['id']}** [{p['expected_risk']}] type={ft} subjects=[{subj_str}] n_violated={p.get('n_violated','?')}")
                 lines.append("")
         except Exception:
             pass
@@ -242,7 +249,7 @@ def generate_report(results, stamp, report_dir):
     # Inv-3 stats for citation lane
     lines.extend(["", "## Inv-3 (Epistemic Grounding) Stats", ""])
     for r in results:
-        if r["lane"] not in ("citations", "baseline", "canary"):
+        if r["lane"] not in ("citations", "baseline", "canary", "ladder"):
             continue
         rd = r["run_dir"]
         try:
@@ -342,7 +349,17 @@ def main():
         else:
             print(f"\nSkipping citations lane: {corpus} not found")
 
-    # --- Lane 3: Sweep ---
+    # --- Lane 3: Citation Ladder ---
+    if "ladder" in lanes and detector:
+        corpus = corpora.get("ladder")
+        if corpus and Path(corpus).exists():
+            rd = run_lane(detector, config, "ladder", corpus,
+                          args.profile, "ladder_nightly", results)
+            new_run_dirs.append(rd)
+        else:
+            print(f"\nSkipping ladder lane: {corpus} not found")
+
+    # --- Lane 4: Sweep ---
     if "sweep" in lanes and detector:
         original_temp_base = config.temperature_base
         original_temp_step = config.temperature_step

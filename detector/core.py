@@ -48,6 +48,8 @@ class DetectionResult:
     temporal_debt: float
     features: Dict[str, Any]
     report: Optional[DetectionReport] = None
+    fail_type: Optional[str] = None
+    fail_subjects: Optional[list] = None
 
 
 class DeltaTDetector:
@@ -711,9 +713,11 @@ class DeltaTDetector:
             confidence=confidence,
             temporal_debt=debt,
             features=features.to_dict(),
-            report=report
+            report=report,
+            fail_type=multi_result.fail_type,
+            fail_subjects=multi_result.fail_subjects,
         )
-    
+
     # =========================================================================
     # Ensemble Detection
     # =========================================================================

@@ -47,14 +47,18 @@ class MultiInvariantResult:
     aggregate_score: float
     prediction: str  # 'FAIL', 'WARN', or 'CLEAN'
     confidence: float
-    
+    fail_type: Optional[str] = None       # 'FABRICATED_IDENTIFIER' or None
+    fail_subjects: Optional[List[str]] = None  # e.g. ['doi:10.xxxx', 'arxiv:2501.00000']
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'results': {k: v.to_dict() for k, v in self.results.items()},
             'n_violated': self.n_violated,
             'aggregate_score': self.aggregate_score,
             'prediction': self.prediction,
-            'confidence': self.confidence
+            'confidence': self.confidence,
+            'fail_type': self.fail_type,
+            'fail_subjects': self.fail_subjects,
         }
 
 
@@ -387,11 +391,35 @@ class EpistemicGroundingTest:
         return results
 
     # ------------------------------------------------------------------
+    # Format validators (local, no network)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _valid_doi_format(doi: str) -> bool:
+        """Check DOI format locally before network lookup."""
+        # Must start with 10., have a registrant code, and a suffix
+        # Reject repeated segments, too-short suffixes, control chars
+        if not re.match(r'^10\.\d{4,}/.{2,}$', doi):
+            return False
+        # Reject obvious repetition (e.g. 10.5592/10.5592/10.5592...)
+        parts = doi.split('/')
+        if len(parts) > 3 and len(set(parts[1:])) == 1:
+            return False
+        return True
+
+    @staticmethod
+    def _valid_arxiv_format(arxiv_id: str) -> bool:
+        """Check arXiv ID format: YYMM.NNNNN(vN)."""
+        return bool(re.match(r'^\d{4}\.\d{4,5}(v\d+)?$', arxiv_id))
+
+    # ------------------------------------------------------------------
     # Specific anchor validators
     # ------------------------------------------------------------------
 
     def validate_doi(self, doi: str) -> Tuple[bool, str]:
-        """Validate a DOI by checking doi.org"""
+        """Validate a DOI — format check first, then network."""
+        if not self._valid_doi_format(doi):
+            return False, "invalid DOI format"
         url = f"https://doi.org/{doi}"
         results = self.validate_urls([url])
         return results.get(url, (False, "not checked"))
@@ -403,7 +431,9 @@ class EpistemicGroundingTest:
         return valid, reason
 
     def validate_arxiv(self, arxiv_id: str) -> Tuple[bool, str]:
-        """Validate an arXiv paper by checking arxiv.org"""
+        """Validate an arXiv paper — format check first, then network."""
+        if not self._valid_arxiv_format(arxiv_id):
+            return False, "invalid arXiv format"
         url = f"https://arxiv.org/abs/{arxiv_id}"
         valid, reason = self._head_requests(url)
         return valid, reason
@@ -627,43 +657,59 @@ class MultiInvariantValidator:
         results: Dict[str, InvariantResult]
     ) -> MultiInvariantResult:
         """
-        Aggregate invariant results into final prediction
-        
-        Args:
-            results: Dict mapping invariant name to InvariantResult
-            
-        Returns:
-            MultiInvariantResult
+        Aggregate invariant results into final prediction.
+
+        Decision rule:
+          - EG (epistemic_grounding) violation with invalid anchors → FAIL
+            (fail_type=FABRICATED_IDENTIFIER)
+          - SC/TC violations without EG → WARN only (demoted from gating)
+          - No violations → CLEAN
+
+        SC and TC are recorded as telemetry but cannot produce FAIL alone.
         """
-        # Count violations
         n_violated = sum(1 for r in results.values() if r.violated)
-        
-        # Weighted score
+
+        # Weighted score (telemetry, not gating)
         weighted_sum = 0.0
         total_weight = 0.0
-        
         for name, result in results.items():
             weight = self.weights.get(name, 1.0)
             weighted_sum += result.score * weight * result.confidence
             total_weight += weight * result.confidence
-        
         aggregate_score = weighted_sum / total_weight if total_weight > 0 else 0.5
-        
-        # Decision rule: FAIL / WARN / CLEAN
-        if n_violated >= self.min_invariants_required:
+
+        # Check EG for fabricated identifiers
+        eg = results.get('epistemic_grounding')
+        eg_violated = eg is not None and eg.violated
+        fail_type = None
+        fail_subjects: List[str] = []
+
+        if eg_violated:
+            # Extract the invalid anchors from EG details
+            vr = eg.details.get('validation_results', {})
+            for anchor, detail in vr.items():
+                if isinstance(detail, dict) and not detail.get('valid', True):
+                    fail_subjects.append(anchor)
+            if fail_subjects:
+                fail_type = 'FABRICATED_IDENTIFIER'
+
+        # Decision rule
+        if eg_violated:
             prediction = 'FAIL'
-            confidence = min(0.95, 0.5 + 0.15 * n_violated)
+            confidence = min(0.95, 0.6 + 0.1 * len(fail_subjects))
         elif n_violated > 0:
             prediction = 'WARN'
             confidence = min(0.85, 0.5 + 0.1 * n_violated)
         else:
             prediction = 'CLEAN'
             confidence = aggregate_score
-        
+
         return MultiInvariantResult(
             results=results,
             n_violated=n_violated,
             aggregate_score=aggregate_score,
             prediction=prediction,
-            confidence=confidence
+            confidence=confidence,
+            fail_type=fail_type,
+            fail_subjects=fail_subjects if fail_subjects else None,
         )

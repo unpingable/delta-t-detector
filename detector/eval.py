@@ -185,6 +185,8 @@ def run_eval(
                 invariant_results=inv_results_dict,
                 n_violated=n_violated,
                 aggregate_score=aggregate_score,
+                fail_type=getattr(result, 'fail_type', None),
+                fail_subjects=getattr(result, 'fail_subjects', None),
             ))
 
     if out_f:

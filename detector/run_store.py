@@ -94,6 +94,9 @@ class PredictionRecord:
     invariant_results: Optional[Dict[str, Dict[str, Any]]] = None
     n_violated: Optional[int] = None
     aggregate_score: Optional[float] = None
+    # FAIL classification
+    fail_type: Optional[str] = None          # 'FABRICATED_IDENTIFIER' or None
+    fail_subjects: Optional[List[str]] = None  # e.g. ['doi:10.xxxx']
 
 
 @dataclass
