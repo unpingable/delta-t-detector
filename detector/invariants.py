@@ -358,7 +358,7 @@ class EpistemicGroundingTest:
         if reason.startswith("HTTP "):
             return True  # Any HTTP status is definitive
         if reason in ("invalid DOI format", "invalid arXiv format", "invalid PyPI format",
-                       "version not found"):
+                       "invalid CVE format", "version not found"):
             return True
         return False
 
@@ -369,7 +369,7 @@ class EpistemicGroundingTest:
             return True
         if "429" in reason or "rate" in lower:
             return True
-        if any(x in lower for x in ("connection", "refused", "reset", "dns")):
+        if any(x in lower for x in ("connect", "refused", "reset", "dns", "ssl")):
             return True
         return False
 
@@ -571,6 +571,42 @@ class EpistemicGroundingTest:
             self._cache[cache_key] = (valid, reason)
         return valid, reason
 
+    @staticmethod
+    def _valid_cve_format(cve_id: str) -> bool:
+        """Check CVE ID format: CVE-YYYY-NNNNN (4+ digit seq, year 1999-2039)."""
+        m = re.match(r'^CVE-(\d{4})-(\d{4,})$', cve_id, re.IGNORECASE)
+        if not m:
+            return False
+        year = int(m.group(1))
+        return 1999 <= year <= 2039
+
+    def validate_cve(self, cve_id: str) -> Tuple[bool, str]:
+        """Validate a CVE via cveawg.mitre.org API."""
+        cve_id = cve_id.upper()
+        if not self._valid_cve_format(cve_id):
+            return False, "invalid CVE format"
+        cache_key = f"cve:{cve_id}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        try:
+            import requests
+            resp = requests.get(
+                f"https://cveawg.mitre.org/api/cve/{cve_id}",
+                headers={"User-Agent": self._USER_AGENT},
+                timeout=self.timeout,
+            )
+            if resp.status_code == 404:
+                result = (False, "HTTP 404")
+            elif resp.status_code == 200:
+                result = (True, "HTTP 200")
+            else:
+                result = (False, f"HTTP {resp.status_code}")
+        except Exception as e:
+            result = (False, str(e)[:80])
+        if self._is_definitive(result[1]):
+            self._cache[cache_key] = result
+        return result
+
     # ------------------------------------------------------------------
     # Title fetch for mismatch detection
     # ------------------------------------------------------------------
@@ -671,9 +707,11 @@ class EpistemicGroundingTest:
         invalid_count = 0
         format_invalid = 0
         resolve_invalid = 0
+        resolver_error_count = 0
         validation_results = {}
 
-        _FORMAT_REASONS = {"invalid DOI format", "invalid arXiv format", "invalid PyPI format"}
+        _FORMAT_REASONS = {"invalid DOI format", "invalid arXiv format", "invalid PyPI format",
+                           "invalid CVE format"}
 
         def _response_class(reason: str) -> str:
             if reason in _FORMAT_REASONS:
@@ -693,7 +731,7 @@ class EpistemicGroundingTest:
             return "error"
 
         def _record(key, valid, reason, resolver):
-            nonlocal valid_count, invalid_count, format_invalid, resolve_invalid
+            nonlocal valid_count, invalid_count, format_invalid, resolve_invalid, resolver_error_count
             from datetime import datetime, timezone
             is_error = self._is_resolver_error(reason)
             validation_results[key] = {
@@ -706,6 +744,7 @@ class EpistemicGroundingTest:
             if is_error:
                 # Resolver error — don't penalize, don't credit
                 validation_results[key]['resolver_error'] = True
+                resolver_error_count += 1
             elif valid:
                 valid_count += 1
             else:
@@ -741,6 +780,11 @@ class EpistemicGroundingTest:
             for pypi_spec in citations.get('pypi', []):
                 valid, reason = self.validate_pypi(pypi_spec)
                 _record(f"pypi:{pypi_spec}", valid, reason, "pypi.org")
+
+            # CVEs
+            for cve_id in citations.get('cves', []):
+                valid, reason = self.validate_cve(cve_id)
+                _record(f"cve:{cve_id}", valid, reason, "cveawg.mitre.org")
 
             # Persist cache after all validations
             if self.use_cache:
@@ -797,6 +841,7 @@ class EpistemicGroundingTest:
                 'resolve_invalid': resolve_invalid,
                 'mismatched_count': mismatched_count,
                 'unvalidated_count': unvalidated,
+                'resolver_error_count': resolver_error_count,
                 'citations_found': {k: len(v) for k, v in citations.items()},
                 'validation_results': validation_results,
                 'max_fabricated_allowed': self.max_fabricated

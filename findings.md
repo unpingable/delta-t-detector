@@ -289,3 +289,117 @@ The three-way split (comply / fabricate / evade) is now fully measured:
 | Format shift (URLs instead) | **80%** (12/15 prompts) | **0%** |
 
 Under soft prompting, the dominant behavior is evasion (80%). Under hard prompting, the dominant behavior is compliance (75%) with a significant fabrication tail (25%). The fabrication was always latent — format shift just hid it.
+
+## Why Timing Lost to Anchors (2026-02-10)
+
+TC (temporal coherence) was designed as the cheap proxy — detect fabrication from confidence dynamics alone. In practice, it's a weak sensor:
+
+1. **Token probs saturate fast.** Small models lock into high confidence on nearly everything. "Locks in quickly" describes fluent generation, not truth.
+2. **Epistemic hesitation ≠ stylistic hesitation.** The model can hedge with words while staying high-prob internally, or confidently emit garbage with identical slope.
+3. **Any fixed threshold gets eaten by the base rate.** If 90% of prompts hit "high confidence" instantly, the threshold is either always-on or inert.
+4. **Timing is downstream of confounders.** Prompt length, template rigidity, decoding params, chat formatting, KV cache warmth. It's thermometers-in-a-server-room energy unless you normalize hard.
+
+Anchors won because they hand you a real **y**: finite external namespaces, resolvers that adjudicate existence, crisp failure classes, and the ability to **force the channel** (locked corpora). Timing can't do any of that.
+
+**TC's remaining role**: conditional secondary signal for triage ("only interpret TC when response claims high-specificity facts without anchors"), never for standalone FAIL. SC/TC are background radiation — useful as telemetry, not as gates.
+
+## CVE Namespace Lane (2026-02-10)
+
+**Question**: Where do CVE IDs sit on the memorization spectrum? CVEs are a structured namespace (CVE-YYYY-NNNNN) with an authoritative API (cveawg.mitre.org). Well-known CVEs (Log4Shell, Heartbleed) should be memorized; obscure or recent ones may not be.
+
+**Method**: 15 soft prompts (`data/canonical_15_cve_n2.jsonl`) + 10 format-locked prompts (`data/canonical_10_cve_locked.jsonl`). Validator: `validate_cve()` using GET to `cveawg.mitre.org/api/cve/{id}` (200/404). Same N=2 format as PyPI lane.
+
+### Headline Numbers
+
+| Corpus | Prompts | Anchors | Valid | Fab Rate | Verdicts |
+|--------|---------|---------|-------|----------|----------|
+| CVE soft | 15 | 105 | 88 | 15.2% | 8C / 6F / 1W |
+| CVE locked | 10 | 32 | 29 | 9.4% | 9C / 1F |
+
+### Decomposing the Soft 15.2%
+
+The 15.2% headline overstates true CVE fabrication. Breaking down the 6 FAILs:
+
+| Prompt | Failure | True CVE Fab? |
+|--------|---------|---------------|
+| cve-03 (Exchange) | Fabricated Wikipedia + MS support URLs | No — CVEs real, URLs fake |
+| cve-04 (Linux kernel 2023/24) | CVE-2023-36241 → 404 on MITRE API | **Yes** |
+| cve-07 (Apple zero-day) | Connection errors to www.cve.mitre.org | No — network failure, CVEs real |
+| cve-08 (sudo/polkit) | Connection errors to securityfocus.com | No — network failure, CVEs real |
+| cve-09 (Fortinet) | CVE-2021-3173 → 404 on MITRE API | **Yes** |
+| cve-11 (Citrix) | CVE-2018-11755 → 404 on MITRE API | **Yes** |
+
+**Only 3/15 prompts had true CVE fabrication**. 2 FAILs were network errors (false positives from www.cve.mitre.org being unreachable), 1 FAIL was URL fabrication with real CVEs.
+
+### Resolver Blind Spot: cve.mitre.org CGI
+
+cve-04 exposed a real blind spot: `https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-36241` returned HTTP 200 (search results page) but `cveawg.mitre.org/api/cve/CVE-2023-36241` returned 404. The URL HEAD check sees a valid page, but the CVE doesn't exist. **Type-specific validators catch fabrications that generic URL checks miss.** This is the strongest argument yet for purpose-built resolvers over HEAD-only URL validation.
+
+### Locked Corpus: CVE is Well-Memorized
+
+Only 1/10 locked prompts failed: `cve-locked-04` (Linux kernel 2023/2024) fabricated CVE-2024-87654 — a suspiciously round number for a recent kernel CVE. The model's training data likely doesn't cover 2024 CVEs densely, so it fabricated a plausible-looking ID.
+
+8/10 locked prompts complied perfectly with format (pure CVE lines, no URLs). 2 prompts (cve-locked-04, cve-locked-06) ignored the "no URLs" instruction and emitted NVD links anyway — partial format lock compliance.
+
+### Five-Namespace Contrast
+
+| Namespace | Soft Fab | Locked Fab | True Fab* | Memorization |
+|-----------|----------|------------|-----------|--------------|
+| RFC       | **0.0%** | n/a        | 0%        | Fully memorized |
+| CVE       | 15.2%    | **9.4%**   | ~3-4%     | Well-memorized (core CVEs known) |
+| PyPI      | 13.2%    | **25.0%**  | 25%       | Names memorized, versions not |
+| DOI/arXiv | ~45%     | n/a        | 45%       | Sparse, vast namespace |
+
+*True Fab = excluding network errors and URL-only fabrication
+
+**CVE sits closer to RFC than to PyPI.** The model reliably recalls CVE IDs for well-known vulnerabilities (Log4Shell, Heartbleed, ProxyLogon, etc.). Fabrication concentrates at temporal boundaries (recent CVEs) and obscure entries. Unlike PyPI, format locking *reduces* fabrication (15% → 9%) because fewer URLs means fewer chances for URL fabrication — the CVEs themselves were mostly real all along.
+
+### CVE vs PyPI: Inverted Lock Effect
+
+| Namespace | Soft → Locked | Direction | Explanation |
+|-----------|--------------|-----------|-------------|
+| PyPI | 13% → 25% | Lock **increases** fab | URLs hide version ignorance; lock exposes it |
+| CVE | 15% → 9% | Lock **decreases** fab | CVEs are real; URLs are the fabrication source |
+
+This is the opposite effect. For PyPI, format lock exposes latent fabrication. For CVE, format lock *removes* fabrication noise by eliminating URL-based false positives. The difference: PyPI fabrication is in the version (model doesn't know versions), CVE fabrication is in the *surrounding URLs* (model knows CVEs but fabricates supporting links).
+
+### Implications
+
+1. **CVE has low discriminative power**: Like RFC, the model mostly gets CVEs right. Use CVE lane as a "near-control" — slightly harder than RFC, much easier than DOI.
+2. **Temporal boundary is the vulnerability**: The one real fabrication in both corpora was a recent CVE (2024). Prompt design should target temporal edges for maximum signal.
+3. **URL fabrication is a cross-namespace problem**: cve-03 fabricated URLs while getting CVEs right. The model treats URLs as disposable supporting material. Type-specific validators are essential.
+4. **Network errors fixed**: 2/6 soft FAILs were from www.cve.mitre.org connection failures. Found a pattern-matching bug: `_is_resolver_error()` checked for `"connection"` but aiohttp errors say `"Cannot connect to..."` — `"connect"` ≠ `"connection"`. Fixed to match `"connect"` (catches both). These 2 FAILs were measurement artifacts, not fabrication. Added `resolver_error_count` to EG details for visibility.
+
+## General Principles (2026-02-10)
+
+### URL-Level Checks Are Not Identifier Validation
+
+`cve.mitre.org/cgi-bin/cvename.cgi` returns HTTP 200 with a search results page for nonexistent CVEs. Any "URL reachable → valid" heuristic is poisoned by search pages, redirect chains, soft-404s, and generic landing pages. Type-specific validators (PyPI JSON API, MITRE CVE API, doi.org resolver) give definitive answers; generic HEAD checks give "the server responded."
+
+**Design rule**: Every namespace needs its own existence oracle. HEAD/200 is a necessary-but-not-sufficient condition, never a truth signal.
+
+### The Lock Principle
+
+> Locking increases fabrication when it forces *unmemorized fields*; locking decreases fabrication when it removes *escape hatches*.
+
+| Namespace | Soft → Locked | Direction | Mechanism |
+|-----------|--------------|-----------|-----------|
+| PyPI | 13% → 25% | Lock **increases** fab | URLs hide version ignorance; lock forces version claims |
+| CVE | 15% → 9% | Lock **decreases** fab | CVEs are real; URLs were the fabrication source |
+
+This is a testable prediction for new namespaces: if the model knows the identifiers but fabricates surrounding URLs, locking will clean up. If the model doesn't know the identifiers, locking will expose latent fabrication.
+
+### Don't Measure Your Resolver's Uptime
+
+Any eval metric that touches network I/O must distinguish definitive results (HTTP 200, 404) from transient failures (connection refused, SSL errors, timeouts). Otherwise you're measuring "is MITRE reachable today?" not "did the model fabricate?" The `_is_resolver_error()` gate and `resolver_error_count` tracking exist for this reason.
+
+### Five-Namespace Spectrum (Frozen)
+
+| Namespace | Fab Rate (locked) | Memorization | Role |
+|-----------|-------------------|--------------|------|
+| RFC | 0% | Fully memorized | False-positive control |
+| CVE | ~9% | Well-memorized | Near-control |
+| PyPI | 25% | Partial (names yes, versions no) | Mid-spectrum |
+| DOI/arXiv | ~45% | Sparse, vast | Primary fabrication test |
+
+RFC/CVE/PyPI/DOI form a four-point calibration curve for the memorization-fabrication relationship. Each has a distinct failure mode and a distinct role in the test suite. Future namespaces to explore: GHSA (GitHub advisories), npm versions — both likely to sit in the PyPI-DOI range.

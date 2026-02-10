@@ -96,18 +96,24 @@ PYPI_URL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+CVE_PATTERN = re.compile(
+    r'\b(CVE-\d{4}-\d{4,})\b',
+    re.IGNORECASE
+)
+
 
 def extract_citations(text: str) -> Dict[str, List[str]]:
     """
     Extract citations from text
 
-    Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns', 'rfcs', 'pypi'
-    Also includes 'pypi_urls' (package names from pypi.org URLs) — metadata only,
-    excluded from count_citations to avoid double-counting with 'urls'.
+    Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns', 'rfcs',
+    'pypi', 'cves'. Also includes 'pypi_urls' (metadata only, excluded from count).
     """
     # Strip trailing punctuation from DOIs and URLs
     dois = [d.rstrip('.,;:)]}') for d in DOI_PATTERN.findall(text)]
     urls = [u.rstrip('.,;:)]}') for u in URL_PATTERN.findall(text)]
+    # Normalize CVE IDs to uppercase
+    cves = [c.upper() for c in CVE_PATTERN.findall(text)]
     return {
         'dois': dois,
         'urls': urls,
@@ -116,6 +122,7 @@ def extract_citations(text: str) -> Dict[str, List[str]]:
         'isbns': ISBN_PATTERN.findall(text),
         'rfcs': RFC_PATTERN.findall(text),
         'pypi': PYPI_PATTERN.findall(text),
+        'cves': cves,
         'pypi_urls': PYPI_URL_PATTERN.findall(text),
     }
 

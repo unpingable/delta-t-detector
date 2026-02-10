@@ -574,6 +574,75 @@ class TestInvariants:
         assert EpistemicGroundingTest._normalize_pypi_name("Foo.Bar_Baz") == "foo-bar-baz"
         assert EpistemicGroundingTest._normalize_pypi_name("requests") == "requests"
 
+    def test_extract_citations_cve(self):
+        """Test CVE ID extraction"""
+        text = "See CVE-2024-21762 and CVE-2023-44487 for details on the vulnerabilities"
+        citations = extract_citations(text)
+        assert len(citations['cves']) == 2
+        assert 'CVE-2024-21762' in citations['cves']
+        assert 'CVE-2023-44487' in citations['cves']
+
+    def test_extract_citations_cve_case_insensitive(self):
+        """Test CVE extraction normalizes to uppercase"""
+        text = "Fixed in cve-2024-12345 and Cve-2023-67890"
+        citations = extract_citations(text)
+        assert len(citations['cves']) == 2
+        assert 'CVE-2024-12345' in citations['cves']
+        assert 'CVE-2023-67890' in citations['cves']
+
+    def test_valid_cve_format(self):
+        """CVE format validator accepts valid IDs, rejects invalid"""
+        from detector.invariants import EpistemicGroundingTest
+        assert EpistemicGroundingTest._valid_cve_format("CVE-2024-21762")
+        assert EpistemicGroundingTest._valid_cve_format("CVE-2023-44487")
+        assert EpistemicGroundingTest._valid_cve_format("CVE-2021-44228")  # Log4Shell
+        assert not EpistemicGroundingTest._valid_cve_format("CVE-1998-0001")  # year too early
+        assert not EpistemicGroundingTest._valid_cve_format("CVE-2024-123")  # seq too short
+        assert not EpistemicGroundingTest._valid_cve_format("CVE-2024")  # no seq
+        assert not EpistemicGroundingTest._valid_cve_format("CWE-79")  # wrong prefix
+
+    def test_is_resolver_error(self):
+        """_is_resolver_error catches connection, SSL, timeout, and rate-limit errors"""
+        from detector.invariants import EpistemicGroundingTest
+        eg = EpistemicGroundingTest()
+        # aiohttp "Cannot connect" (the bug that was fixed)
+        assert eg._is_resolver_error("Cannot connect to host www.cve.mitre.org:443 ssl:d")
+        # requests ConnectionError
+        assert eg._is_resolver_error("ConnectionError: ...")
+        # connection refused
+        assert eg._is_resolver_error("Connection refused")
+        # SSL errors
+        assert eg._is_resolver_error("ssl: CERTIFICATE_VERIFY_FAILED")
+        assert eg._is_resolver_error("[SSL: WRONG_VERSION_NUMBER]")
+        # timeout
+        assert eg._is_resolver_error("timeout")
+        assert eg._is_resolver_error("ReadTimeoutError")
+        # rate limit
+        assert eg._is_resolver_error("HTTP 429")
+        assert eg._is_resolver_error("rate limited")
+        # DNS
+        assert eg._is_resolver_error("DNS resolution failed")
+        # connection reset
+        assert eg._is_resolver_error("Connection reset by peer")
+        # NOT resolver errors:
+        assert not eg._is_resolver_error("HTTP 404")
+        assert not eg._is_resolver_error("HTTP 200")
+        assert not eg._is_resolver_error("version not found")
+        assert not eg._is_resolver_error("invalid DOI format")
+
+    def test_resolver_error_excluded_from_invalid(self):
+        """Resolver errors (connection, SSL) don't count as invalid anchors"""
+        eg = EpistemicGroundingTest(validate_urls=True, use_cache=False)
+        # Mock the URL validation to return a connection error
+        def mock_validate_urls(urls):
+            return {url: (False, "Cannot connect to host example.com:443 ssl:d") for url in urls}
+        eg.validate_urls = mock_validate_urls
+        result = eg.test("See https://example.com/thing for details.", validate=True)
+        details = result.details
+        assert details['invalid_count'] == 0, "Connection errors should not count as invalid"
+        assert details['resolver_error_count'] == 1, "Should track resolver error count"
+        assert not result.violated, "Resolver errors should not trigger violation"
+
     def test_extract_pypi_urls(self):
         """Extract package names from pypi.org/project/<name>/ URLs"""
         text = "See https://pypi.org/project/requests/ and https://pypi.org/project/flask/"
