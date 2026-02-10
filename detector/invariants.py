@@ -363,13 +363,19 @@ class EpistemicGroundingTest:
         return False
 
     def _is_resolver_error(self, reason: str) -> bool:
-        """Is this a resolver error (timeout, rate-limit, connection)?"""
+        """Is this a resolver error (timeout, rate-limit, connection, ambiguous)?
+
+        401/403 are ambiguous — could be blocking rather than existence.
+        Treat them as unresolvable rather than penalizing or crediting.
+        """
         lower = reason.lower()
         if "timeout" in lower:
             return True
         if "429" in reason or "rate" in lower:
             return True
         if any(x in lower for x in ("connect", "refused", "reset", "dns", "ssl")):
+            return True
+        if "HTTP 401" in reason or "HTTP 403" in reason:
             return True
         return False
 
@@ -385,7 +391,9 @@ class EpistemicGroundingTest:
                 url, allow_redirects=True, timeout=self.timeout,
                 headers={'User-Agent': self._USER_AGENT},
             )
-            valid = resp.status_code in (200, 301, 302, 403, 401, 405)
+            # 200/3xx = exists; 401/403 = ambiguous (might be blocking, not existence);
+            # 405 = server rejects HEAD but page exists
+            valid = resp.status_code in (200, 301, 302, 405)
             return valid, f"HTTP {resp.status_code}"
         except Exception as e:
             return False, str(e)[:80]
@@ -398,7 +406,7 @@ class EpistemicGroundingTest:
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
                 allow_redirects=True
             ) as response:
-                valid = response.status in [200, 301, 302, 403, 401, 405]
+                valid = response.status in [200, 301, 302, 405]
                 return url, valid, f"HTTP {response.status}"
         except asyncio.TimeoutError:
             return url, False, "timeout"
@@ -723,7 +731,7 @@ class EpistemicGroundingTest:
             if reason == "version not found":
                 return "not_found"
             if "HTTP 403" in reason or "HTTP 401" in reason:
-                return "found"  # exists but access restricted
+                return "ambiguous"  # might be blocking, not evidence of existence
             if "timeout" in reason.lower():
                 return "timeout"
             if "HTTP" in reason:

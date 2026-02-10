@@ -1,5 +1,48 @@
 # Empirical Findings — Δt Hallucination Detector
 
+## Key Findings
+
+**Setup**: Qwen 2.5 3B-Instruct, temperature 0.7, N=2 citation pressure, five namespaces with authoritative validators. All measurements replicated across Linux (crow) and macOS (Mac mini ARM64) — resolver behavior is platform-invariant for authoritative APIs.
+
+**1. Fabrication is namespace-dependent, not model-global.**
+
+| Namespace | Fab Rate (locked) | Memorization | Failure Mode |
+|-----------|-------------------|--------------|--------------|
+| RFC | 0% | Fully memorized | None |
+| CVE | ~9% | Well-memorized | Temporal boundary (recent IDs) |
+| PyPI | 25% | Names yes, versions no | Version fabrication ("perfect lie") |
+| DOI/arXiv | ~45% | Sparse, vast | Wholesale fabrication |
+
+A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations" — it's honest about things it memorized.
+
+**2. Format locking exposes latent fabrication — or removes noise.**
+- PyPI lock *increases* fab (13%→25%): forces unmemorized version claims
+- CVE lock *decreases* fab (15%→9%): removes URL fabrication noise
+- General rule: locking increases fab when it forces unmemorized fields; decreases fab when it removes escape hatches
+
+**3. Models actively avoid checkable formats (format shift evasion).**
+- 80% of soft-format PyPI prompts substituted URLs for `pypi:name==version`
+- Format shift is the dominant behavior under soft prompting; fabrication is secondary
+- Format locking eliminates evasion and doubles fabrication — the lies were always latent
+
+**4. Multi-agent hub topology is toxic for citation integrity.**
+- Hub fabrication: +19pp vs single (36.7% vs 17.8%)
+- Causal decomposition: selection (+13pp) > synthesis (+5pp) > role framing (+1pp)
+- The merge step creates new fabrications; non-generative selection doesn't rescue it
+- Single-agent is strictly better for citation integrity at 3B scale
+
+**5. URL HEAD checks are not identifier validation.**
+- `cve.mitre.org/cgi-bin/` returns HTTP 200 for nonexistent CVEs (search page)
+- HTTP 401/403 is platform-dependent (Wikipedia: 403 on Mac, 404 on Linux for same fabricated page)
+- Type-specific validators (MITRE CVE API, PyPI JSON API, doi.org) give definitive answers; generic HEAD checks don't
+
+**6. N=2 is the danger zone.**
+- N=1: 14% fab, low pressure → mostly compliant
+- N=2: 50% fab, zero evasion → maximal plausible fabrication
+- N=5: 26% fab, 60% evasion → overwhelmed, switches to avoidance
+
+---
+
 ## Behavioral Phase Map (Qwen 3B under citation pressure)
 
 Under increasing citation pressure, the model chooses one of four behavioral regimes:

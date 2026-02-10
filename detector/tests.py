@@ -624,11 +624,33 @@ class TestInvariants:
         assert eg._is_resolver_error("DNS resolution failed")
         # connection reset
         assert eg._is_resolver_error("Connection reset by peer")
+        # 401/403 are ambiguous — treat as resolver error
+        assert eg._is_resolver_error("HTTP 401")
+        assert eg._is_resolver_error("HTTP 403")
         # NOT resolver errors:
         assert not eg._is_resolver_error("HTTP 404")
         assert not eg._is_resolver_error("HTTP 200")
         assert not eg._is_resolver_error("version not found")
         assert not eg._is_resolver_error("invalid DOI format")
+
+    def test_url_403_treated_as_unknown(self):
+        """HTTP 403 should not count as valid or invalid (platform-dependent).
+
+        Regression: Wikipedia returned 403 on Mac but 404 on Linux for a
+        fabricated page. 403 is ambiguous — the server might be blocking
+        the request, not confirming existence.
+        """
+        eg = EpistemicGroundingTest(validate_urls=True, use_cache=False)
+        # Mock URL validation to return 403
+        def mock_validate_urls(urls):
+            return {url: (False, "HTTP 403") for url in urls}
+        eg.validate_urls = mock_validate_urls
+        result = eg.test("See https://en.wikipedia.org/wiki/Fabricated_Page for details.", validate=True)
+        details = result.details
+        assert details['invalid_count'] == 0, "403 should not count as invalid"
+        assert details['valid_count'] == 0, "403 should not count as valid"
+        assert details['resolver_error_count'] == 1, "403 should be a resolver error"
+        assert not result.violated, "403 should not trigger violation"
 
     def test_resolver_error_excluded_from_invalid(self):
         """Resolver errors (connection, SSL) don't count as invalid anchors"""
