@@ -1795,6 +1795,117 @@ class TestRunStore:
 
 
 # ============================================================================
+# Coupling Topology Tests
+# ============================================================================
+
+class TestCouplingTopology:
+    """Tests for scripts/coupling.py helpers"""
+
+    def test_coupling_step_record_schema(self):
+        """Step record has all required keys per the coupling schema"""
+        from scripts.coupling import extract_step_record
+        record = extract_step_record(
+            run_id="test_run",
+            prompt_id="np-N2-01",
+            topology="chain",
+            step="A",
+            text="ANSWER: Paris is the capital.\nCITATIONS:\n- DOI: 10.1234/test.5678",
+            timing_ms={"infer": 1234.5},
+            expected_min_anchors=2,
+        )
+        required_keys = {
+            "run_id", "prompt_id", "topology", "step", "agent_id",
+            "input_refs", "text", "anchors_extracted", "extraction_meta",
+            "timing_ms",
+        }
+        assert required_keys.issubset(set(record.keys()))
+        assert record["topology"] == "chain"
+        assert record["step"] == "A"
+        assert record["agent_id"] == "qwen3b"
+        assert isinstance(record["anchors_extracted"], list)
+        assert record["extraction_meta"]["expected_min_anchors"] == 2
+        assert "extract" in record["timing_ms"]
+
+    def test_format_chat_applies_template(self):
+        """format_chat produces non-empty formatted string"""
+        from scripts.coupling import format_chat
+        # Mock a tokenizer with apply_chat_template
+        mock_tokenizer = Mock()
+        mock_tokenizer.apply_chat_template.return_value = "<|im_start|>system\nHello<|im_end|>"
+        result = format_chat(mock_tokenizer, "You are helpful.", "What is 2+2?")
+        assert isinstance(result, str)
+        assert len(result) > 0
+        mock_tokenizer.apply_chat_template.assert_called_once()
+        args = mock_tokenizer.apply_chat_template.call_args
+        messages = args[0][0]
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+
+    def test_hub_provenance_detects_novel_citations(self):
+        """check_hub_provenance flags citations A introduced that weren't in B or C"""
+        from scripts.coupling import check_hub_provenance
+        resp_b = "See DOI: 10.1234/paper-b for details."
+        resp_c = "Reference arXiv:2301.12345 covers this."
+        # A keeps B's DOI but adds a novel one
+        resp_a = "See DOI: 10.1234/paper-b and DOI: 10.5678/invented for details."
+        prov = check_hub_provenance(resp_a, resp_b, resp_c)
+        assert prov["introduced_new_citations"] is True
+        assert len(prov["novel_anchors"]) == 1
+        assert "doi:10.5678/invented" in prov["novel_anchors"][0]
+
+    def test_hub_provenance_clean_merge(self):
+        """check_hub_provenance clean when A only uses B+C citations"""
+        from scripts.coupling import check_hub_provenance
+        resp_b = "See DOI: 10.1234/paper-b for details."
+        resp_c = "Reference arXiv:2301.12345 covers this."
+        resp_a = "See DOI: 10.1234/paper-b and arXiv:2301.12345."
+        prov = check_hub_provenance(resp_a, resp_b, resp_c)
+        assert prov["introduced_new_citations"] is False
+        assert prov["novel_anchors"] == []
+
+    def test_score_final_eg_only(self):
+        """score_final uses EG only, not TC/SC"""
+        from scripts.coupling import score_final
+        mock_detector = Mock()
+        # Set up EG test to return a known result
+        mock_eg_result = InvariantResult(
+            name='epistemic_grounding',
+            score=0.1,
+            violated=True,
+            details={
+                'total_citations': 1,
+                'valid_count': 0,
+                'invalid_count': 1,
+                'format_invalid': 0,
+                'resolve_invalid': 1,
+                'validation_results': {
+                    'doi:10.1234/fake': {'valid': False, 'reason': 'HTTP 404'},
+                },
+            },
+        )
+        mock_detector.epistemic_grounding_test.test.return_value = mock_eg_result
+        # Set up validator to return FAIL
+        from detector.invariants import MultiInvariantResult
+        mock_multi = MultiInvariantResult(
+            results={'epistemic_grounding': mock_eg_result},
+            n_violated=1,
+            aggregate_score=0.1,
+            prediction='FAIL',
+            confidence=0.85,
+            fail_type='FABRICATED_IDENTIFIER',
+            fail_subjects=['doi:10.1234/fake'],
+        )
+        mock_detector.multi_invariant_validator.aggregate.return_value = mock_multi
+        result = score_final(mock_detector, "DOI: 10.1234/fake", expected_min_anchors=2)
+        assert result["verdict"] == "FAIL"
+        assert result["fail_type"] == "FABRICATED_IDENTIFIER"
+        # Verify only EG was called (not TC or SC)
+        mock_detector.epistemic_grounding_test.test.assert_called_once()
+        agg_args = mock_detector.multi_invariant_validator.aggregate.call_args
+        assert set(agg_args[0][0].keys()) == {"epistemic_grounding"}
+
+
+# ============================================================================
 # Integration Tests
 # ============================================================================
 
