@@ -57,7 +57,7 @@ def compute_text_hash(text: str) -> str:
 
 # Citation extraction patterns
 DOI_PATTERN = re.compile(
-    r'\b(10\.\d{4,}/[^\s]+)\b',
+    r'\b(10\.\d{4,}/[^\s<>|]+)',
     re.IGNORECASE
 )
 
@@ -93,9 +93,12 @@ def extract_citations(text: str) -> Dict[str, List[str]]:
 
     Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns', 'rfcs'
     """
+    # Strip trailing punctuation from DOIs and URLs
+    dois = [d.rstrip('.,;:)]}') for d in DOI_PATTERN.findall(text)]
+    urls = [u.rstrip('.,;:)]}') for u in URL_PATTERN.findall(text)]
     return {
-        'dois': DOI_PATTERN.findall(text),
-        'urls': URL_PATTERN.findall(text),
+        'dois': dois,
+        'urls': urls,
         'arxiv': ARXIV_PATTERN.findall(text),
         'pmids': PMID_PATTERN.findall(text),
         'isbns': ISBN_PATTERN.findall(text),
