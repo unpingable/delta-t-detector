@@ -440,13 +440,75 @@ class EpistemicGroundingTest:
         return valid, reason
 
     # ------------------------------------------------------------------
+    # Title fetch for mismatch detection
+    # ------------------------------------------------------------------
+
+    def fetch_doi_title(self, doi: str) -> Optional[str]:
+        """Fetch paper title from Crossref API. Returns None on failure."""
+        try:
+            import requests
+            resp = requests.get(
+                f"https://api.crossref.org/works/{doi}",
+                headers={"User-Agent": self._USER_AGENT},
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                titles = data.get("message", {}).get("title", [])
+                return titles[0] if titles else None
+        except Exception:
+            pass
+        return None
+
+    def fetch_arxiv_title(self, arxiv_id: str) -> Optional[str]:
+        """Fetch paper title from arXiv API. Returns None on failure."""
+        try:
+            import requests
+            resp = requests.get(
+                f"https://export.arxiv.org/api/query?id_list={arxiv_id}",
+                headers={"User-Agent": self._USER_AGENT},
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                # Simple XML parse for title
+                text = resp.text
+                import re as _re
+                match = _re.search(r"<title[^>]*>(.+?)</title>", text, _re.DOTALL)
+                if match:
+                    # Skip the feed title (first match is "ArXiv Query: ...")
+                    matches = _re.findall(r"<title[^>]*>(.+?)</title>", text, _re.DOTALL)
+                    if len(matches) >= 2:
+                        return matches[1].strip()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def check_citation_relevance(claim_text: str, title: str) -> float:
+        """Compute word overlap between claim and title. Returns 0.0-1.0."""
+        claim_words = set(claim_text.lower().split())
+        title_words = set(title.lower().split())
+        # Remove common stopwords
+        stopwords = {"the", "a", "an", "of", "in", "on", "for", "and", "to",
+                     "is", "are", "was", "were", "by", "with", "from", "at",
+                     "that", "this", "it", "its", "as", "be", "or", "not"}
+        claim_words -= stopwords
+        title_words -= stopwords
+        if not claim_words or not title_words:
+            return 0.0
+        overlap = claim_words & title_words
+        return len(overlap) / min(len(claim_words), len(title_words))
+
+    # ------------------------------------------------------------------
     # Main test
     # ------------------------------------------------------------------
 
     def test(
         self,
         text: str,
-        validate: bool = True
+        validate: bool = True,
+        check_relevance: bool = False,
+        relevance_threshold: float = 0.15,
     ) -> InvariantResult:
         """
         Test epistemic grounding of a response
@@ -539,6 +601,32 @@ class EpistemicGroundingTest:
         else:
             valid_count = total_citations
 
+        # Relevance check for valid citations (opt-in)
+        mismatched_count = 0
+        if check_relevance and validate and self.validate_urls_enabled:
+            for key, vr in list(validation_results.items()):
+                if not vr.get('valid'):
+                    continue
+                title = None
+                if key.startswith("doi:"):
+                    title = self.fetch_doi_title(key[4:])
+                    vr['title_resolver'] = 'crossref'
+                elif key.startswith("arxiv:"):
+                    title = self.fetch_arxiv_title(key[6:])
+                    vr['title_resolver'] = 'arxiv_api'
+                if title:
+                    relevance = self.check_citation_relevance(text, title)
+                    vr['fetched_title'] = title
+                    vr['relevance_score'] = round(relevance, 3)
+                    if relevance < relevance_threshold:
+                        vr['mismatched'] = True
+                        mismatched_count += 1
+                        # Downgrade: valid anchor but wrong paper
+                        vr['valid'] = False
+                        vr['reason'] = 'mismatched citation'
+                        valid_count -= 1
+                        invalid_count += 1
+
         # Remaining unvalidated (PMIDs, ISBNs — harder to check)
         unvalidated = len(citations['pmids']) + len(citations['isbns'])
 
@@ -560,6 +648,7 @@ class EpistemicGroundingTest:
                 'invalid_count': invalid_count,
                 'format_invalid': format_invalid,
                 'resolve_invalid': resolve_invalid,
+                'mismatched_count': mismatched_count,
                 'unvalidated_count': unvalidated,
                 'citations_found': {k: len(v) for k, v in citations.items()},
                 'validation_results': validation_results,
@@ -714,10 +803,18 @@ class MultiInvariantValidator:
         if eg_violated:
             # Extract the invalid anchors from EG details
             vr = eg.details.get('validation_results', {})
+            mismatched_subjects: List[str] = []
+            fabricated_subjects: List[str] = []
             for anchor, detail in vr.items():
                 if isinstance(detail, dict) and not detail.get('valid', True):
                     fail_subjects.append(anchor)
-            if fail_subjects:
+                    if detail.get('mismatched'):
+                        mismatched_subjects.append(anchor)
+                    else:
+                        fabricated_subjects.append(anchor)
+            if mismatched_subjects and not fabricated_subjects:
+                fail_type = 'MISMATCHED_CITATION'
+            elif fail_subjects:
                 fail_type = 'FABRICATED_IDENTIFIER'
 
         # Check evasion: anchors below expected minimum

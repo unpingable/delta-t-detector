@@ -888,6 +888,44 @@ class TestInvariants:
         assert entry['response_class'] == 'not_found'
         assert 'timestamp' in entry
 
+    def test_citation_relevance_checker(self):
+        """check_citation_relevance computes word overlap"""
+        from detector.invariants import EpistemicGroundingTest
+        # High relevance: claim matches title
+        score = EpistemicGroundingTest.check_citation_relevance(
+            "Transformers outperform RNNs on machine translation",
+            "Attention Is All You Need: Transformers for Machine Translation"
+        )
+        assert score > 0.2
+        # Low relevance: unrelated
+        score = EpistemicGroundingTest.check_citation_relevance(
+            "Dropout reduces overfitting in deep networks",
+            "Cooking Recipes for Traditional Italian Cuisine"
+        )
+        assert score < 0.1
+
+    def test_mismatched_citation_fail_type(self):
+        """MISMATCHED_CITATION when DOI exists but title doesn't match claim"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.1, violated=True,
+                details={
+                    'total_citations': 1,
+                    'mismatched_count': 1,
+                    'validation_results': {
+                        'doi:10.1234/real-but-wrong': {
+                            'valid': False, 'reason': 'mismatched citation',
+                            'mismatched': True, 'relevance_score': 0.02,
+                        },
+                    }
+                }
+            ),
+        }
+        aggregated = validator.aggregate(results)
+        assert aggregated.prediction == 'FAIL'
+        assert aggregated.fail_type == 'MISMATCHED_CITATION'
+
 
 # ============================================================================
 # Reporting Tests
@@ -1608,6 +1646,25 @@ class TestRunStore:
             assert summary["invariant_mean_scores"] == {}
             manifest = json.loads((rd / "manifest.json").read_text())
             assert manifest["multi_invariant"] is False
+
+    def test_flight_recorder_fields_present(self):
+        """Summary includes flight recorder two-axis fields"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cp = self._make_corpus(tmpdir)
+            preds = self._make_multi_invariant_predictions(3)
+            # Give one prediction a fail_type and expected_min_anchors
+            preds[1].fail_type = "FABRICATED_IDENTIFIER"
+            preds[1].expected_min_anchors = 5
+            rd = store_run(preds, cp, "m", "general",
+                           runs_root=os.path.join(tmpdir, "runs"), multi_invariant=True)
+            summary = json.loads((rd / "summary.json").read_text())
+            assert "anchors_total" in summary
+            assert "fabrication_rate" in summary
+            assert "evasion_rate" in summary
+            assert "fail_type_counts" in summary
+            assert "warn_type_counts" in summary
+            assert "resolver_stats" in summary
+            assert summary["fail_type_counts"].get("FABRICATED_IDENTIFIER", 0) >= 1
 
 
 # ============================================================================

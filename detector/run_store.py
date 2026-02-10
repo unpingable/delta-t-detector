@@ -138,6 +138,18 @@ class RunSummary:
     # Multi-invariant (empty for single-invariant runs)
     invariant_violation_counts: Dict[str, int] = field(default_factory=dict)
     invariant_mean_scores: Dict[str, float] = field(default_factory=dict)
+    # Flight recorder (two-axis metrics)
+    anchors_total: int = 0
+    anchors_valid: int = 0
+    anchors_format_invalid: int = 0
+    anchors_resolve_invalid: int = 0
+    fabrication_rate: Optional[float] = None
+    evasion_count: int = 0
+    evasion_rate: Optional[float] = None
+    anchors_shortfall: int = 0
+    fail_type_counts: Dict[str, int] = field(default_factory=dict)
+    warn_type_counts: Dict[str, int] = field(default_factory=dict)
+    resolver_stats: Dict[str, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +168,17 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
     # Multi-invariant aggregation
     inv_violation_counts: Dict[str, int] = {}
     inv_scores: Dict[str, List[float]] = {}
+
+    # Flight recorder accumulators
+    anchors_total = 0
+    anchors_valid = 0
+    anchors_fmt_inv = 0
+    anchors_resolve_inv = 0
+    evasion_count = 0
+    anchors_shortfall = 0
+    fail_type_counts: Dict[str, int] = {}
+    warn_type_counts: Dict[str, int] = {}
+    resolver_stats: Dict[str, int] = {}
 
     for p in predictions:
         pred_counts[p.prediction] = pred_counts.get(p.prediction, 0) + 1
@@ -178,6 +201,33 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
                 score = inv_data.get("score")
                 if score is not None:
                     inv_scores.setdefault(inv_name, []).append(score)
+
+            # Flight recorder: EG details
+            eg = p.invariant_results.get("epistemic_grounding", {})
+            eg_details = eg.get("details", {})
+            tc = eg_details.get("total_citations", 0)
+            anchors_total += tc
+            anchors_valid += eg_details.get("valid_count", 0)
+            anchors_fmt_inv += eg_details.get("format_invalid", 0)
+            anchors_resolve_inv += eg_details.get("resolve_invalid", 0)
+
+            # Resolver response_class stats
+            for _anchor, vr in eg_details.get("validation_results", {}).items():
+                if isinstance(vr, dict):
+                    rc = vr.get("response_class", "unknown")
+                    resolver_stats[rc] = resolver_stats.get(rc, 0) + 1
+
+            # Evasion
+            exp_min = p.expected_min_anchors
+            if exp_min is not None and tc < exp_min:
+                evasion_count += 1
+                anchors_shortfall += (exp_min - tc)
+
+        # Fail/warn type histograms
+        if p.fail_type:
+            fail_type_counts[p.fail_type] = fail_type_counts.get(p.fail_type, 0) + 1
+        if p.warn_type:
+            warn_type_counts[p.warn_type] = warn_type_counts.get(p.warn_type, 0) + 1
 
     # High-risk recall: of items expected high risk, how many predicted unstable/FAIL?
     high_risk_labels = {"high", "hallucination", "temporal_unstable"}
@@ -217,6 +267,12 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
 
     inv_mean_scores = {name: mean(scores) for name, scores in inv_scores.items()}
 
+    n_preds = len(predictions)
+    inv_total = anchors_fmt_inv + anchors_resolve_inv
+    # Fall back to anchors_total - anchors_valid when split not available
+    if inv_total == 0 and anchors_total > anchors_valid:
+        inv_total = anchors_total - anchors_valid
+
     return RunSummary(
         prediction_counts=pred_counts,
         mean_confidence=mean(confs) if confs else 0.0,
@@ -229,6 +285,17 @@ def _compute_summary(predictions: List[PredictionRecord]) -> RunSummary:
         confusion_matrix=confusion,
         invariant_violation_counts=inv_violation_counts,
         invariant_mean_scores=inv_mean_scores,
+        anchors_total=anchors_total,
+        anchors_valid=anchors_valid,
+        anchors_format_invalid=anchors_fmt_inv,
+        anchors_resolve_invalid=anchors_resolve_inv,
+        fabrication_rate=inv_total / anchors_total if anchors_total > 0 else None,
+        evasion_count=evasion_count,
+        evasion_rate=evasion_count / n_preds if n_preds > 0 else None,
+        anchors_shortfall=anchors_shortfall,
+        fail_type_counts=fail_type_counts,
+        warn_type_counts=warn_type_counts,
+        resolver_stats=resolver_stats,
     )
 
 
