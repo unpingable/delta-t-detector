@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-Overnight harness: load model once, run canary + stability sweep.
+Overnight harness: lane-based eval suite with nightly report.
+
+Lanes:
+  0. Canary    — tiny corpus, fast, catches regressions (~5 min)
+  1. Baseline  — full v3 corpus, default config (~25 min)
+  2. Citations — citation-forcing corpus, exercises Inv-3 (~15 min)
+  3. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
+  4. Replay    — CPU-only threshold scan on all new runs (minutes)
 
 Usage:
-    python3 scripts/overnight.py                       # full suite
-    python3 scripts/overnight.py --canary-only         # just the nightly canary
-    python3 scripts/overnight.py --sweep-only          # just the stability sweep
-    python3 scripts/overnight.py --corpus path.jsonl   # custom corpus
+    bin/overnight.sh                    # full suite
+    bin/overnight.sh --lanes canary     # just canary
+    bin/overnight.sh --lanes canary,baseline,citations
+    bin/overnight.sh --lanes sweep      # just stability sweep
 """
 
 import argparse
@@ -14,6 +21,9 @@ import json
 import sys
 import os
 import time
+import subprocess
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,14 +34,20 @@ from detector.eval import load_jsonl, compute_guard_flags
 from detector.run_store import PredictionRecord, store_run, _utcnow_iso
 
 # Defaults
-CORPUS = "data/eval_seed_v2.jsonl"
+CORPORA = {
+    "canary": "data/canary_10.jsonl",
+    "baseline": "data/eval_seed_v3.jsonl",
+    "citations": "data/citation_forcing_30.jsonl",
+}
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEVICE = "cuda"
 PROFILE_NAME = "general"
 
-# Stability sweep grid (small and targeted)
+# Stability sweep grid
 TEMP_GRID = [0.5, 0.7, 0.9]
 NPERTURB_GRID = [3, 5]
+
+ALL_LANES = ["canary", "baseline", "citations", "sweep", "replay"]
 
 
 def run_one_eval(detector, corpus_path, profile_name, label=""):
@@ -39,8 +55,10 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
     profile = RISK_PROFILES[profile_name]
     started_at = _utcnow_iso()
     prediction_records = []
+    n_items = 0
 
     for item in load_jsonl(corpus_path):
+        n_items += 1
         result = detector.detect_multi_invariant(item.prompt, test_semantic=True)
         features = result.features or {}
         anomaly_score = None
@@ -80,48 +98,252 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
             aggregate_score=aggregate_score,
         ))
 
+        if n_items % 10 == 0:
+            print(f"    [{label}] {n_items} prompts done...")
+
     return prediction_records, started_at
 
 
+def run_lane(detector, config, lane_name, corpus_path, profile_name, label, results):
+    """Run a single lane and store the result."""
+    print(f"\n{'='*60}")
+    print(f"LANE: {lane_name} ({label})")
+    print(f"  corpus: {corpus_path}")
+    print(f"{'='*60}")
+
+    t0 = time.time()
+    preds, started = run_one_eval(detector, corpus_path, profile_name, label=label)
+    rd = store_run(
+        preds, corpus_path, config.model_name if hasattr(config, 'model_name') else MODEL,
+        profile_name, device=config.device, started_at=started, multi_invariant=True,
+    )
+    elapsed = time.time() - t0
+    results.append({"lane": lane_name, "label": label, "run_dir": rd, "elapsed": elapsed,
+                     "corpus": corpus_path, "n_items": len(preds)})
+    print(f"  Stored: {rd}  ({elapsed:.0f}s, {len(preds)} items)")
+    return rd
+
+
+def run_replay(new_run_dirs, results):
+    """Run CPU-only replay scan on new runs."""
+    print(f"\n{'='*60}")
+    print("LANE: replay (CPU-only threshold scan)")
+    print(f"{'='*60}")
+
+    replay_script = Path(__file__).parent / "replay.py"
+    if not replay_script.exists():
+        print("  replay.py not found, skipping")
+        return
+
+    for rd in new_run_dirs:
+        run_id = rd.name.split("_")[0]
+        print(f"\n  Replaying {run_id}...")
+        t0 = time.time()
+        try:
+            result = subprocess.run(
+                [sys.executable, str(replay_script), "--run", str(rd)],
+                capture_output=True, text=True, timeout=300,
+            )
+            elapsed = time.time() - t0
+            output = result.stdout.strip()
+            if output:
+                # Just print the Pareto lines
+                lines = output.split("\n")
+                pareto = [l for l in lines if "Pareto" in l or "accel=" in l or "HR_recall" in l]
+                for l in pareto[:5]:
+                    print(f"    {l}")
+            results.append({"lane": "replay", "label": f"replay_{run_id}",
+                           "run_dir": rd, "elapsed": elapsed})
+            print(f"  ({elapsed:.0f}s)")
+        except subprocess.TimeoutExpired:
+            print(f"  replay timed out for {run_id}")
+        except Exception as e:
+            print(f"  replay failed: {e}")
+
+
+def generate_report(results, stamp, report_dir):
+    """Generate a nightly.md report summarizing all lanes."""
+    report_path = Path(report_dir) / f"nightly-{stamp}.md"
+    lines = [
+        f"# Nightly Report {stamp}",
+        "",
+        f"Generated: {datetime.now(timezone.utc).isoformat()}",
+        "",
+        "## Run Inventory",
+        "",
+        "| Lane | Label | Items | Time | Run ID |",
+        "|------|-------|-------|------|--------|",
+    ]
+
+    for r in results:
+        if r["lane"] == "replay":
+            continue
+        rd = r["run_dir"]
+        run_id = rd.name.split("_")[0] if hasattr(rd, 'name') else str(rd)
+        lines.append(f"| {r['lane']} | {r['label']} | {r.get('n_items','?')} | {r['elapsed']:.0f}s | {run_id} |")
+
+    lines.extend(["", "## Tier Counts", ""])
+    lines.append("| Lane | CLEAN | WARN | FAIL | HR Recall | LR Precision |")
+    lines.append("|------|-------|------|------|-----------|--------------|")
+
+    for r in results:
+        if r["lane"] == "replay":
+            continue
+        rd = r["run_dir"]
+        try:
+            summary = json.loads((rd / "summary.json").read_text())
+            pc = summary.get("prediction_counts", {})
+            hr = summary.get("high_risk_recall", "N/A")
+            lp = summary.get("low_risk_precision", "N/A")
+            if isinstance(hr, float):
+                hr = f"{hr:.3f}"
+            if isinstance(lp, float):
+                lp = f"{lp:.3f}"
+            lines.append(f"| {r['lane']} | {pc.get('CLEAN',0)} | {pc.get('WARN',0)} | {pc.get('FAIL',0)} | {hr} | {lp} |")
+        except Exception:
+            lines.append(f"| {r['lane']} | ? | ? | ? | ? | ? |")
+
+    # Invariant violation counts
+    lines.extend(["", "## Invariant Violations", ""])
+    lines.append("| Lane | TC | SC | EG |")
+    lines.append("|------|----|----|----|")
+
+    for r in results:
+        if r["lane"] == "replay":
+            continue
+        rd = r["run_dir"]
+        try:
+            summary = json.loads((rd / "summary.json").read_text())
+            inv = summary.get("invariant_violation_counts", {})
+            tc = inv.get("temporal_coherence", 0)
+            sc = inv.get("semantic_conservation", 0)
+            eg = inv.get("epistemic_grounding", 0)
+            lines.append(f"| {r['lane']} | {tc} | {sc} | {eg} |")
+        except Exception:
+            lines.append(f"| {r['lane']} | ? | ? | ? |")
+
+    # FAILs detail
+    lines.extend(["", "## FAIL Details", ""])
+    for r in results:
+        if r["lane"] == "replay":
+            continue
+        rd = r["run_dir"]
+        try:
+            preds = [json.loads(l) for l in (rd / "predictions.jsonl").read_text().strip().split("\n")]
+            fails = [p for p in preds if p["prediction"] == "FAIL"]
+            if fails:
+                lines.append(f"### {r['lane']} ({r['label']})")
+                for p in fails:
+                    lines.append(f"- **{p['id']}** [{p['expected_risk']}] n_violated={p.get('n_violated','?')}")
+                lines.append("")
+        except Exception:
+            pass
+
+    # Inv-3 stats for citation lane
+    lines.extend(["", "## Inv-3 (Epistemic Grounding) Stats", ""])
+    for r in results:
+        if r["lane"] not in ("citations", "baseline", "canary"):
+            continue
+        rd = r["run_dir"]
+        try:
+            preds = [json.loads(l) for l in (rd / "predictions.jsonl").read_text().strip().split("\n")]
+            total_anchors = 0
+            valid_anchors = 0
+            invalid_anchors = 0
+            no_citations = 0
+            for p in preds:
+                eg = (p.get("invariant_results") or {}).get("epistemic_grounding", {}).get("details", {})
+                tc_count = eg.get("total_citations", 0)
+                if tc_count == 0:
+                    no_citations += 1
+                else:
+                    total_anchors += tc_count
+                    valid_anchors += eg.get("valid_count", 0)
+                    invalid_anchors += eg.get("invalid_count", 0)
+            lines.append(f"### {r['lane']}")
+            lines.append(f"- Prompts with no citations: {no_citations}/{len(preds)}")
+            lines.append(f"- Total anchors found: {total_anchors}")
+            lines.append(f"- Valid: {valid_anchors}, Invalid: {invalid_anchors}")
+            lines.append("")
+        except Exception as e:
+            lines.append(f"### {r['lane']}: error reading ({e})")
+            lines.append("")
+
+    report_text = "\n".join(lines) + "\n"
+    report_path.write_text(report_text)
+    print(f"\nReport written: {report_path}")
+    return report_path
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Overnight eval harness")
-    parser.add_argument("--corpus", default=CORPUS, help="JSONL corpus path")
+    parser = argparse.ArgumentParser(description="Overnight eval harness (lane-based)")
+    parser.add_argument("--lanes", default="all",
+                        help="Comma-separated lanes to run: canary,baseline,citations,sweep,replay (or 'all')")
     parser.add_argument("--model", default=MODEL)
     parser.add_argument("--device", default=DEVICE)
     parser.add_argument("--profile", default=PROFILE_NAME)
-    parser.add_argument("--canary-only", action="store_true")
-    parser.add_argument("--sweep-only", action="store_true")
+    # Legacy compat
+    parser.add_argument("--canary-only", action="store_true", help="(legacy) same as --lanes canary")
+    parser.add_argument("--sweep-only", action="store_true", help="(legacy) same as --lanes sweep")
+    parser.add_argument("--corpus", default=None, help="Override corpus for canary/baseline lane")
     args = parser.parse_args()
 
-    run_canary = not args.sweep_only
-    run_sweep = not args.canary_only
+    # Parse lanes
+    if args.canary_only:
+        lanes = ["canary"]
+    elif args.sweep_only:
+        lanes = ["sweep"]
+    elif args.lanes == "all":
+        lanes = ALL_LANES
+    else:
+        lanes = [l.strip() for l in args.lanes.split(",")]
 
-    # Load model once
+    # Corpus overrides
+    corpora = dict(CORPORA)
+    if args.corpus:
+        corpora["canary"] = args.corpus
+        corpora["baseline"] = args.corpus
+
+    # Load model once (skip if only running replay)
+    detector = None
     config = DetectorConfig()
     config.device = args.device
-    detector = DeltaTDetector(model_name=args.model, config=config)
-    detector.set_risk_profile(args.profile)
+
+    gpu_lanes = [l for l in lanes if l != "replay"]
+    if gpu_lanes:
+        print(f"Loading model: {args.model} on {args.device}")
+        detector = DeltaTDetector(model_name=args.model, config=config)
+        detector.set_risk_profile(args.profile)
 
     results = []
+    new_run_dirs = []
     wall_start = time.time()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    # --- Canary run (default config) ---
-    if run_canary:
-        print(f"\n{'='*60}")
-        print("CANARY RUN (default config)")
-        print(f"{'='*60}")
-        t0 = time.time()
-        preds, started = run_one_eval(detector, args.corpus, args.profile, label="canary")
-        rd = store_run(
-            preds, args.corpus, args.model, args.profile,
-            device=args.device, started_at=started, multi_invariant=True,
-        )
-        elapsed = time.time() - t0
-        results.append(("canary", rd, elapsed))
-        print(f"  Stored: {rd}  ({elapsed:.0f}s)")
+    # --- Lane 0: Canary ---
+    if "canary" in lanes and detector:
+        rd = run_lane(detector, config, "canary", corpora["canary"],
+                      args.profile, "canary", results)
+        new_run_dirs.append(rd)
 
-    # --- Stability sweep ---
-    if run_sweep:
+    # --- Lane 1: Baseline ---
+    if "baseline" in lanes and detector:
+        rd = run_lane(detector, config, "baseline", corpora["baseline"],
+                      args.profile, "baseline_nightly", results)
+        new_run_dirs.append(rd)
+
+    # --- Lane 2: Citations ---
+    if "citations" in lanes and detector:
+        corpus = corpora.get("citations")
+        if corpus and Path(corpus).exists():
+            rd = run_lane(detector, config, "citations", corpus,
+                          args.profile, "citations_nightly", results)
+            new_run_dirs.append(rd)
+        else:
+            print(f"\nSkipping citations lane: {corpus} not found")
+
+    # --- Lane 3: Sweep ---
+    if "sweep" in lanes and detector:
         original_temp_base = config.temperature_base
         original_temp_step = config.temperature_step
         profile = RISK_PROFILES[args.profile]
@@ -130,47 +352,52 @@ def main():
         for temp_base in TEMP_GRID:
             for n_perturb in NPERTURB_GRID:
                 label = f"sweep_t{temp_base}_n{n_perturb}"
-                print(f"\n{'='*60}")
-                print(f"SWEEP: temp_base={temp_base}, n_perturbations={n_perturb}")
-                print(f"{'='*60}")
-
-                # Patch config in-place (no model reload)
                 config.temperature_base = temp_base
                 profile.n_perturbations = n_perturb
 
-                t0 = time.time()
-                preds, started = run_one_eval(
-                    detector, args.corpus, args.profile, label=label
-                )
-                rd = store_run(
-                    preds, args.corpus, args.model, args.profile,
-                    device=args.device, started_at=started, multi_invariant=True,
-                )
-                elapsed = time.time() - t0
-                results.append((label, rd, elapsed))
-                print(f"  Stored: {rd}  ({elapsed:.0f}s)")
+                rd = run_lane(detector, config, "sweep", corpora["baseline"],
+                              args.profile, label, results)
+                new_run_dirs.append(rd)
 
-        # Restore originals
         config.temperature_base = original_temp_base
         config.temperature_step = original_temp_step
         profile.n_perturbations = original_n_perturb
 
+    # --- Lane 4: Replay ---
+    if "replay" in lanes and new_run_dirs:
+        run_replay(new_run_dirs, results)
+
     # --- Summary ---
     wall_total = time.time() - wall_start
     print(f"\n\n{'='*60}")
-    print(f"OVERNIGHT SUMMARY  ({wall_total:.0f}s total)")
+    print(f"OVERNIGHT SUMMARY  ({wall_total:.0f}s total, {len(results)} runs)")
     print(f"{'='*60}")
 
-    for label, rd, elapsed in results:
-        summary = json.loads((rd / "summary.json").read_text())
-        pc = summary["prediction_counts"]
-        print(f"\n  {label} ({elapsed:.0f}s)")
-        print(f"    Predictions: {pc}")
-        print(f"    HR recall: {summary.get('high_risk_recall', 'N/A')}")
-        print(f"    LP precision: {summary.get('low_risk_precision', 'N/A')}")
-        inv_v = summary.get("invariant_violation_counts", {})
-        if inv_v:
-            print(f"    Invariant violations: {inv_v}")
+    for r in results:
+        if r["lane"] == "replay":
+            continue
+        rd = r["run_dir"]
+        try:
+            summary = json.loads((rd / "summary.json").read_text())
+            pc = summary["prediction_counts"]
+            inv_v = summary.get("invariant_violation_counts", {})
+            print(f"\n  {r['label']} ({r['elapsed']:.0f}s, {r.get('n_items','?')} items)")
+            print(f"    Predictions: {pc}")
+            hr = summary.get('high_risk_recall', 'N/A')
+            lp = summary.get('low_risk_precision', 'N/A')
+            print(f"    HR recall: {hr}  |  LR precision: {lp}")
+            if inv_v:
+                print(f"    Invariant violations: {inv_v}")
+        except Exception as e:
+            print(f"\n  {r['label']} ({r['elapsed']:.0f}s) — error reading summary: {e}")
+
+    # Generate report
+    report_dir = Path("reports")
+    report_dir.mkdir(exist_ok=True)
+    try:
+        report_path = generate_report(results, stamp, report_dir)
+    except Exception as e:
+        print(f"\nFailed to generate report: {e}")
 
 
 if __name__ == "__main__":

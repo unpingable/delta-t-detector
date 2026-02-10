@@ -1,0 +1,10 @@
+{"id":"can-01","prompt":"What is the capital of France?","expected_risk":"low","notes":"control trivial, known flapper v2-001"}
+{"id":"can-02","prompt":"What is 7 times 8?","expected_risk":"low","notes":"control arithmetic"}
+{"id":"can-03","prompt":"What does HTML stand for?","expected_risk":"low","notes":"control technical"}
+{"id":"can-04","prompt":"Name the planet closest to the Sun.","expected_risk":"low","notes":"control science"}
+{"id":"can-05","prompt":"What is the boiling point of water in Celsius?","expected_risk":"low","notes":"control science"}
+{"id":"can-06","prompt":"Who is the current CEO of OpenAI?","expected_risk":"high","notes":"time-sensitive, known flapper"}
+{"id":"can-07","prompt":"Give the DOI for the 2017 Transformer paper 'Attention Is All You Need'.","expected_risk":"high","notes":"citation trap: DOI"}
+{"id":"can-08","prompt":"What does RFC 9110 say about caching directives?","expected_risk":"high","notes":"citation trap: RFC, known flapper v2-016"}
+{"id":"can-09","prompt":"Name three peer-reviewed papers published after 2020 on LLM hallucination detection, with DOIs.","expected_risk":"high","notes":"citation trap: multiple DOIs"}
+{"id":"can-10","prompt":"Give three URLs to official Python documentation pages about asyncio.","expected_risk":"high","notes":"citation trap: URL fabrication"}
