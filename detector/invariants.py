@@ -474,45 +474,45 @@ class EpistemicGroundingTest:
 
         valid_count = 0
         invalid_count = 0
+        format_invalid = 0
+        resolve_invalid = 0
         validation_results = {}
 
+        _FORMAT_REASONS = {"invalid DOI format", "invalid arXiv format"}
+
+        def _record(key, valid, reason):
+            nonlocal valid_count, invalid_count, format_invalid, resolve_invalid
+            validation_results[key] = {'valid': valid, 'reason': reason}
+            if valid:
+                valid_count += 1
+            else:
+                invalid_count += 1
+                if reason in _FORMAT_REASONS:
+                    format_invalid += 1
+                else:
+                    resolve_invalid += 1
+
         if validate and self.validate_urls_enabled:
-            # URLs
+            # URLs (no format check — always resolve)
             if citations['urls']:
                 url_results = self.validate_urls(citations['urls'])
                 for url, (valid, reason) in url_results.items():
-                    validation_results[url] = {'valid': valid, 'reason': reason}
-                    if valid:
-                        valid_count += 1
-                    else:
-                        invalid_count += 1
+                    _record(url, valid, reason)
 
             # DOIs
             for doi in citations['dois']:
                 valid, reason = self.validate_doi(doi)
-                validation_results[f"doi:{doi}"] = {'valid': valid, 'reason': reason}
-                if valid:
-                    valid_count += 1
-                else:
-                    invalid_count += 1
+                _record(f"doi:{doi}", valid, reason)
 
             # RFCs
             for rfc in citations.get('rfcs', []):
                 valid, reason = self.validate_rfc(rfc)
-                validation_results[f"rfc:{rfc}"] = {'valid': valid, 'reason': reason}
-                if valid:
-                    valid_count += 1
-                else:
-                    invalid_count += 1
+                _record(f"rfc:{rfc}", valid, reason)
 
             # arXiv
             for arxiv_id in citations.get('arxiv', []):
                 valid, reason = self.validate_arxiv(arxiv_id)
-                validation_results[f"arxiv:{arxiv_id}"] = {'valid': valid, 'reason': reason}
-                if valid:
-                    valid_count += 1
-                else:
-                    invalid_count += 1
+                _record(f"arxiv:{arxiv_id}", valid, reason)
         else:
             valid_count = total_citations
 
@@ -535,6 +535,8 @@ class EpistemicGroundingTest:
                 'total_citations': total_citations,
                 'valid_count': valid_count,
                 'invalid_count': invalid_count,
+                'format_invalid': format_invalid,
+                'resolve_invalid': resolve_invalid,
                 'unvalidated_count': unvalidated,
                 'citations_found': {k: len(v) for k, v in citations.items()},
                 'validation_results': validation_results,

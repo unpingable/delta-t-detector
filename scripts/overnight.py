@@ -39,7 +39,7 @@ CORPORA = {
     "canary": "data/canary_10.jsonl",
     "baseline": "data/eval_seed_v3.jsonl",
     "citations": "data/citation_forcing_30.jsonl",
-    "ladder": "data/citation_ladder_50.jsonl",
+    "ladder": "data/citation_ladder_60.jsonl",
 }
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEVICE = "cuda"
@@ -100,6 +100,7 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
             aggregate_score=aggregate_score,
             fail_type=getattr(result, 'fail_type', None),
             fail_subjects=getattr(result, 'fail_subjects', None),
+            expected_min_anchors=item.expected_min_anchors,
         ))
 
         if n_items % 10 == 0:
@@ -163,6 +164,48 @@ def run_replay(new_run_dirs, results):
             print(f"  replay timed out for {run_id}")
         except Exception as e:
             print(f"  replay failed: {e}")
+
+
+def _write_two_axis_row(lines, label, preds):
+    """Compute fabrication + evasion axes for a set of predictions, append table row."""
+    total_anchors = 0
+    valid_anchors = 0
+    fmt_invalid = 0
+    resolve_invalid = 0
+    zero_anchor_prompts = 0
+    evasion_prompts = 0
+    abstention_prompts = 0
+
+    for p in preds:
+        eg = (p.get("invariant_results") or {}).get("epistemic_grounding", {}).get("details", {})
+        tc = eg.get("total_citations", 0)
+        total_anchors += tc
+        valid_anchors += eg.get("valid_count", 0)
+        fmt_invalid += eg.get("format_invalid", 0)
+        resolve_invalid += eg.get("resolve_invalid", 0)
+
+        if tc == 0:
+            zero_anchor_prompts += 1
+
+        expected_min = p.get("expected_min_anchors")
+        if expected_min is not None and tc < expected_min:
+            evasion_prompts += 1
+
+        # Abstention detection requires stored generation text (not yet available)
+
+    n = len(preds)
+    inv = fmt_invalid + resolve_invalid
+    # Fall back to total_anchors - valid_anchors when split not available (old runs)
+    if inv == 0 and total_anchors > valid_anchors:
+        inv = total_anchors - valid_anchors
+    fab_rate = f"{inv/total_anchors:.0%}" if total_anchors > 0 else "N/A"
+    zero_rate = f"{zero_anchor_prompts}/{n}"
+    evasion_rate = f"{evasion_prompts}/{n}"
+
+    lines.append(
+        f"| {label} | {total_anchors} | {valid_anchors} | {fmt_invalid} | {resolve_invalid} "
+        f"| {fab_rate} | {zero_rate} | {evasion_rate} | {abstention_prompts}/{n} |"
+    )
 
 
 def generate_report(results, stamp, report_dir):
@@ -246,35 +289,39 @@ def generate_report(results, stamp, report_dir):
         except Exception:
             pass
 
-    # Inv-3 stats for citation lane
-    lines.extend(["", "## Inv-3 (Epistemic Grounding) Stats", ""])
+    # Two-axis report: Fabrication + Evasion
+    lines.extend(["", "## Two-Axis Report (Fabrication + Evasion)", ""])
+    lines.append("| Lane | Anchors | Valid | Fmt-Inv | Resolve-Inv | Fab Rate | Zero-Anchor | Evasion | Abstain |")
+    lines.append("|------|---------|-------|---------|-------------|----------|-------------|---------|---------|")
+
     for r in results:
-        if r["lane"] not in ("citations", "baseline", "canary", "ladder"):
+        if r["lane"] in ("replay", "sweep"):
             continue
         rd = r["run_dir"]
         try:
             preds = [json.loads(l) for l in (rd / "predictions.jsonl").read_text().strip().split("\n")]
-            total_anchors = 0
-            valid_anchors = 0
-            invalid_anchors = 0
-            no_citations = 0
-            for p in preds:
-                eg = (p.get("invariant_results") or {}).get("epistemic_grounding", {}).get("details", {})
-                tc_count = eg.get("total_citations", 0)
-                if tc_count == 0:
-                    no_citations += 1
-                else:
-                    total_anchors += tc_count
-                    valid_anchors += eg.get("valid_count", 0)
-                    invalid_anchors += eg.get("invalid_count", 0)
-            lines.append(f"### {r['lane']}")
-            lines.append(f"- Prompts with no citations: {no_citations}/{len(preds)}")
-            lines.append(f"- Total anchors found: {total_anchors}")
-            lines.append(f"- Valid: {valid_anchors}, Invalid: {invalid_anchors}")
-            lines.append("")
+            _write_two_axis_row(lines, r["lane"], preds)
         except Exception as e:
-            lines.append(f"### {r['lane']}: error reading ({e})")
-            lines.append("")
+            lines.append(f"| {r['lane']} | ? | ? | ? | ? | ? | ? | ? | ? |")
+
+    # Per-level breakdown for ladder
+    for r in results:
+        if r["lane"] != "ladder":
+            continue
+        rd = r["run_dir"]
+        try:
+            preds = [json.loads(l) for l in (rd / "predictions.jsonl").read_text().strip().split("\n")]
+            levels = {}
+            for p in preds:
+                level = p["id"].split("-")[1] if "-" in p["id"] else "?"
+                levels.setdefault(level, []).append(p)
+            lines.extend(["", "### Ladder Per-Level Breakdown", ""])
+            lines.append("| Level | Anchors | Valid | Fmt-Inv | Resolve-Inv | Fab Rate | Zero-Anchor | Evasion | Abstain |")
+            lines.append("|-------|---------|-------|---------|-------------|----------|-------------|---------|---------|")
+            for level in sorted(levels):
+                _write_two_axis_row(lines, level, levels[level])
+        except Exception:
+            pass
 
     report_text = "\n".join(lines) + "\n"
     report_path.write_text(report_text)

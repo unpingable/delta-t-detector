@@ -19,6 +19,7 @@ class EvalItem:
     prompt: str
     expected_risk: str
     notes: str = ""
+    expected_min_anchors: Optional[int] = None
 
 
 def load_jsonl(path: str) -> Iterable[EvalItem]:
@@ -32,7 +33,8 @@ def load_jsonl(path: str) -> Iterable[EvalItem]:
                 id=str(data.get("id", "")),
                 prompt=str(data.get("prompt", "")),
                 expected_risk=str(data.get("expected_risk", "")),
-                notes=str(data.get("notes", ""))
+                notes=str(data.get("notes", "")),
+                expected_min_anchors=data.get("expected_min_anchors"),
             )
 
 
@@ -187,6 +189,7 @@ def run_eval(
                 aggregate_score=aggregate_score,
                 fail_type=getattr(result, 'fail_type', None),
                 fail_subjects=getattr(result, 'fail_subjects', None),
+                expected_min_anchors=item.expected_min_anchors,
             ))
 
     if out_f:

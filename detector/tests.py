@@ -773,6 +773,48 @@ class TestInvariants:
         assert not EpistemicGroundingTest._valid_arxiv_format("abcd.12345")  # letters
         assert not EpistemicGroundingTest._valid_arxiv_format("2301.123")   # suffix too short
 
+    def test_eg_details_track_format_vs_resolve(self):
+        """EG details include format_invalid and resolve_invalid counts"""
+        test = EpistemicGroundingTest(max_fabricated=0)
+        # Monkeypatch validate methods to control outcomes
+        test.validate_urls_enabled = True
+        original_validate_doi = test.validate_doi
+        calls = []
+
+        def fake_validate_doi(doi):
+            calls.append(doi)
+            if "badformat" in doi:
+                return False, "invalid DOI format"
+            return False, "HTTP 404"
+
+        test.validate_doi = fake_validate_doi
+        # Text with two DOIs
+        from unittest.mock import patch
+        from detector.utils import extract_citations as real_extract
+        fake_citations = {
+            'dois': ['10.1234/badformat', '10.5678/looks-ok-but-404'],
+            'urls': [], 'rfcs': [], 'arxiv': [], 'pmids': [], 'isbns': []
+        }
+        with patch('detector.invariants.extract_citations', return_value=fake_citations):
+            with patch('detector.invariants.count_citations', return_value=2):
+                result = test.test("fake text", validate=True)
+        assert result.details['format_invalid'] == 1
+        assert result.details['resolve_invalid'] == 1
+        assert result.details['invalid_count'] == 2
+
+    def test_eval_item_expected_min_anchors(self):
+        """EvalItem loads expected_min_anchors from JSONL"""
+        import tempfile, os
+        from detector.eval import load_jsonl
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+            f.write('{"id":"t1","prompt":"test","expected_risk":"low","expected_min_anchors":3}\n')
+            f.write('{"id":"t2","prompt":"test2","expected_risk":"low"}\n')
+            f.flush()
+            items = list(load_jsonl(f.name))
+        os.unlink(f.name)
+        assert items[0].expected_min_anchors == 3
+        assert items[1].expected_min_anchors is None
+
 
 # ============================================================================
 # Reporting Tests
