@@ -539,6 +539,121 @@ class TestInvariants:
         assert '9110' in citations['rfcs']
         assert '7231' in citations['rfcs']
 
+    def test_extract_citations_pypi(self):
+        """Test PyPI spec extraction"""
+        text = "Install pypi:requests==2.31.0 and pypi:flask==3.0.0 for the API"
+        citations = extract_citations(text)
+        assert len(citations['pypi']) == 2
+        assert 'requests==2.31.0' in citations['pypi']
+        assert 'flask==3.0.0' in citations['pypi']
+
+    def test_extract_citations_pypi_case_insensitive(self):
+        """Test PyPI spec extraction is case insensitive on prefix"""
+        text = "Use PyPI:PyYAML==6.0.1 and PYPI:typing_extensions==4.9.0"
+        citations = extract_citations(text)
+        assert len(citations['pypi']) == 2
+        assert 'PyYAML==6.0.1' in citations['pypi']
+        assert 'typing_extensions==4.9.0' in citations['pypi']
+
+    def test_valid_pypi_format(self):
+        """PyPI format validator accepts valid specs, rejects invalid"""
+        from detector.invariants import EpistemicGroundingTest
+        assert EpistemicGroundingTest._valid_pypi_format("requests==2.31.0")
+        assert EpistemicGroundingTest._valid_pypi_format("Flask==3.0.0")
+        assert EpistemicGroundingTest._valid_pypi_format("typing-extensions==4.9.0")
+        assert not EpistemicGroundingTest._valid_pypi_format("requests")  # no ==
+        assert not EpistemicGroundingTest._valid_pypi_format("requests==")  # no version
+        assert not EpistemicGroundingTest._valid_pypi_format("==2.0")  # no name
+        assert not EpistemicGroundingTest._valid_pypi_format("-bad==1.0")  # name starts with -
+
+    def test_normalize_pypi_name(self):
+        """PEP 503 normalization: lowercase + runs of [-_.] → hyphen"""
+        from detector.invariants import EpistemicGroundingTest
+        assert EpistemicGroundingTest._normalize_pypi_name("PyYAML") == "pyyaml"
+        assert EpistemicGroundingTest._normalize_pypi_name("typing_extensions") == "typing-extensions"
+        assert EpistemicGroundingTest._normalize_pypi_name("Foo.Bar_Baz") == "foo-bar-baz"
+        assert EpistemicGroundingTest._normalize_pypi_name("requests") == "requests"
+
+    def test_extract_pypi_urls(self):
+        """Extract package names from pypi.org/project/<name>/ URLs"""
+        text = "See https://pypi.org/project/requests/ and https://pypi.org/project/flask/"
+        citations = extract_citations(text)
+        assert len(citations['pypi_urls']) == 2
+        assert 'requests' in citations['pypi_urls']
+        assert 'flask' in citations['pypi_urls']
+        # pypi_urls should not inflate citation count (already counted as urls)
+        assert count_citations(citations) == 2  # only the 2 URLs
+
+    def test_evasion_format_shift(self):
+        """EVASION_FORMAT_SHIFT when type-specific < min but total >= min"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.8, violated=False,
+                details={
+                    'total_citations': 2,
+                    'citations_found': {'pypi': 0, 'urls': 2, 'dois': 0,
+                                        'arxiv': 0, 'pmids': 0, 'isbns': 0,
+                                        'rfcs': 0, 'pypi_urls': 2},
+                }
+            ),
+        }
+        aggregated = validator.aggregate(
+            results, expected_min_anchors=2, expected_anchor_type='pypi')
+        assert aggregated.prediction == 'WARN'
+        assert aggregated.warn_type == 'EVASION_FORMAT_SHIFT'
+
+    def test_evasion_missing_anchors(self):
+        """EVASION_MISSING_ANCHORS when total < min and type specified"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.5, violated=False,
+                details={
+                    'total_citations': 0,
+                    'citations_found': {'pypi': 0, 'urls': 0, 'dois': 0,
+                                        'arxiv': 0, 'pmids': 0, 'isbns': 0,
+                                        'rfcs': 0, 'pypi_urls': 0},
+                }
+            ),
+        }
+        aggregated = validator.aggregate(
+            results, expected_min_anchors=2, expected_anchor_type='pypi')
+        assert aggregated.prediction == 'WARN'
+        assert aggregated.warn_type == 'EVASION_MISSING_ANCHORS'
+
+    def test_need_evidence_backward_compat(self):
+        """NEED_EVIDENCE still works when no expected_anchor_type"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.5, violated=False,
+                details={'total_citations': 0, 'note': 'No citations found'}
+            ),
+        }
+        aggregated = validator.aggregate(results, expected_min_anchors=2)
+        assert aggregated.prediction == 'WARN'
+        assert aggregated.warn_type == 'NEED_EVIDENCE'
+
+    def test_no_evasion_when_type_satisfied(self):
+        """No evasion when type-specific anchors >= expected_min"""
+        validator = MultiInvariantValidator(min_invariants_required=2)
+        results = {
+            'epistemic_grounding': InvariantResult(
+                name='epistemic_grounding', score=0.8, violated=False,
+                details={
+                    'total_citations': 2,
+                    'citations_found': {'pypi': 2, 'urls': 0, 'dois': 0,
+                                        'arxiv': 0, 'pmids': 0, 'isbns': 0,
+                                        'rfcs': 0, 'pypi_urls': 0},
+                }
+            ),
+        }
+        aggregated = validator.aggregate(
+            results, expected_min_anchors=2, expected_anchor_type='pypi')
+        assert aggregated.prediction == 'CLEAN'
+        assert aggregated.warn_type is None
+
     def test_epistemic_grounding_no_citations(self):
         """Test epistemic grounding with no citations"""
         test = EpistemicGroundingTest()

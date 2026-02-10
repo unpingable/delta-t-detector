@@ -156,7 +156,12 @@ def extract_step_record(
     }
 
 
-def score_final(detector, text: str, expected_min_anchors: Optional[int]) -> dict:
+def score_final(
+    detector,
+    text: str,
+    expected_min_anchors: Optional[int],
+    expected_anchor_type: Optional[str] = None,
+) -> dict:
     """Score the final output using EG only, then aggregate."""
     eg_result = detector.epistemic_grounding_test.test(
         text, validate=True, check_relevance=True
@@ -164,6 +169,7 @@ def score_final(detector, text: str, expected_min_anchors: Optional[int]) -> dic
     multi_result = detector.multi_invariant_validator.aggregate(
         {"epistemic_grounding": eg_result},
         expected_min_anchors=expected_min_anchors,
+        expected_anchor_type=expected_anchor_type,
     )
     return {
         "eg": eg_result.to_dict(),
@@ -286,6 +292,7 @@ def run_topology(
     topology: str,
     run_id: str,
     expected_min_anchors: Optional[int] = None,
+    expected_anchor_type: Optional[str] = None,
 ) -> Tuple[List[dict], dict]:
     """Run a single prompt through the given topology.
 
@@ -303,7 +310,7 @@ def run_topology(
             run_id, prompt_id, topology, "A", text,
             {"infer": round(infer_ms, 1)}, expected_min_anchors,
         ))
-        final_result = score_final(detector, text, expected_min_anchors)
+        final_result = score_final(detector, text, expected_min_anchors, expected_anchor_type)
 
     elif topology == "single_rolematch":
         # Single agent using hub-B role prompt and hub seed derivation.
@@ -315,7 +322,7 @@ def run_topology(
             run_id, prompt_id, topology, "B", text,
             {"infer": round(infer_ms, 1)}, expected_min_anchors,
         ))
-        final_result = score_final(detector, text, expected_min_anchors)
+        final_result = score_final(detector, text, expected_min_anchors, expected_anchor_type)
 
     elif topology == "chain":
         # A → B → C
@@ -342,7 +349,7 @@ def run_topology(
             {"infer": round(ms_c, 1)}, expected_min_anchors,
         ))
 
-        final_result = score_final(detector, resp_c, expected_min_anchors)
+        final_result = score_final(detector, resp_c, expected_min_anchors, expected_anchor_type)
 
     elif topology == "hub":
         # B + C independent, then A merges
@@ -375,7 +382,7 @@ def run_topology(
         step_a["hub_provenance"] = provenance
         steps.append(step_a)
 
-        final_result = score_final(detector, resp_a, expected_min_anchors)
+        final_result = score_final(detector, resp_a, expected_min_anchors, expected_anchor_type)
         final_result["hub_provenance"] = provenance
 
     elif topology == "hub_select":
@@ -420,7 +427,7 @@ def run_topology(
         steps.append(step_a)
 
         # Score the CHOSEN candidate wholesale
-        final_result = score_final(detector, scored_text, expected_min_anchors)
+        final_result = score_final(detector, scored_text, expected_min_anchors, expected_anchor_type)
         final_result["hub_select"] = step_a["hub_select"]
 
     elif topology == "hub_enforced":
@@ -461,7 +468,7 @@ def run_topology(
         steps.append(step_a)
 
         # Score the CLEANED text
-        final_result = score_final(detector, cleaned, expected_min_anchors)
+        final_result = score_final(detector, cleaned, expected_min_anchors, expected_anchor_type)
         final_result["hub_provenance"] = provenance
 
     else:
@@ -482,6 +489,8 @@ def compute_topology_metrics(results: List[dict], n_prompts: int) -> dict:
     resolve_inv = 0
     mismatched = 0
     evasion = 0
+    evasion_format_shift = 0
+    evasion_missing = 0
     verdicts: Dict[str, int] = {}
     hub_novel_count = 0  # prompts where hub-A invented new citations
 
@@ -496,10 +505,16 @@ def compute_topology_metrics(results: List[dict], n_prompts: int) -> dict:
         mismatched += details.get("mismatched_count", 0)
 
         # Evasion: anchors < expected
-        meta = details.get("extraction_meta", {})
         exp = r.get("_expected_min_anchors")
         if exp is not None and tc < exp:
             evasion += 1
+
+        # Split evasion by warn_type
+        wt = r.get("warn_type")
+        if wt == "EVASION_FORMAT_SHIFT":
+            evasion_format_shift += 1
+        elif wt == "EVASION_MISSING_ANCHORS":
+            evasion_missing += 1
 
         v = r["verdict"]
         verdicts[v] = verdicts.get(v, 0) + 1
@@ -519,6 +534,8 @@ def compute_topology_metrics(results: List[dict], n_prompts: int) -> dict:
         "mismatch_rate": mismatched / anchors_total if anchors_total > 0 else None,
         "lie_rate": lie_total / anchors_total if anchors_total > 0 else None,
         "evasion_rate": evasion / n_prompts if n_prompts > 0 else None,
+        "evasion_format_shift": evasion_format_shift,
+        "evasion_missing_anchors": evasion_missing,
         "verdict_histogram": verdicts,
     }
     if hub_novel_count > 0:
@@ -549,7 +566,12 @@ def print_comparison_table(all_metrics: Dict[str, dict]) -> str:
     # Verdict histograms
     lines.append("\nVerdict histograms:")
     for topo, metrics in all_metrics.items():
-        lines.append(f"  {topo}: {metrics['verdict_histogram']}")
+        extra = ""
+        fs = metrics.get("evasion_format_shift", 0)
+        em = metrics.get("evasion_missing_anchors", 0)
+        if fs or em:
+            extra = f"  (format_shift={fs}, missing={em})"
+        lines.append(f"  {topo}: {metrics['verdict_histogram']}{extra}")
 
     table = "\n".join(lines)
     print(table)
@@ -682,6 +704,7 @@ def main():
             steps, final_result = run_topology(
                 detector, item.id, item.prompt, topology, run_id,
                 expected_min_anchors=item.expected_min_anchors,
+                expected_anchor_type=item.expected_anchor_type,
             )
             all_steps.extend(steps)
             final_result["_expected_min_anchors"] = item.expected_min_anchors

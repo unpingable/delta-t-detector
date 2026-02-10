@@ -20,6 +20,7 @@ class EvalItem:
     expected_risk: str
     notes: str = ""
     expected_min_anchors: Optional[int] = None
+    expected_anchor_type: Optional[str] = None
 
 
 def load_jsonl(path: str) -> Iterable[EvalItem]:
@@ -35,6 +36,7 @@ def load_jsonl(path: str) -> Iterable[EvalItem]:
                 expected_risk=str(data.get("expected_risk", "")),
                 notes=str(data.get("notes", "")),
                 expected_min_anchors=data.get("expected_min_anchors"),
+                expected_anchor_type=data.get("expected_anchor_type"),
             )
 
 

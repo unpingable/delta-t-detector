@@ -86,12 +86,24 @@ RFC_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+PYPI_PATTERN = re.compile(
+    r'\bpypi:\s*([a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?==[0-9A-Za-z.+!_-]+)',
+    re.IGNORECASE
+)
+
+PYPI_URL_PATTERN = re.compile(
+    r'https?://pypi\.org/project/([a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?)',
+    re.IGNORECASE
+)
+
 
 def extract_citations(text: str) -> Dict[str, List[str]]:
     """
     Extract citations from text
 
-    Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns', 'rfcs'
+    Returns dict with keys: 'dois', 'urls', 'arxiv', 'pmids', 'isbns', 'rfcs', 'pypi'
+    Also includes 'pypi_urls' (package names from pypi.org URLs) — metadata only,
+    excluded from count_citations to avoid double-counting with 'urls'.
     """
     # Strip trailing punctuation from DOIs and URLs
     dois = [d.rstrip('.,;:)]}') for d in DOI_PATTERN.findall(text)]
@@ -103,12 +115,18 @@ def extract_citations(text: str) -> Dict[str, List[str]]:
         'pmids': PMID_PATTERN.findall(text),
         'isbns': ISBN_PATTERN.findall(text),
         'rfcs': RFC_PATTERN.findall(text),
+        'pypi': PYPI_PATTERN.findall(text),
+        'pypi_urls': PYPI_URL_PATTERN.findall(text),
     }
 
 
+# Keys excluded from count_citations (metadata, not independent anchors)
+_COUNT_EXCLUDE = frozenset({'pypi_urls'})
+
+
 def count_citations(citations: Dict[str, List[str]]) -> int:
-    """Count total citations extracted"""
-    return sum(len(v) for v in citations.values())
+    """Count total citations extracted (excludes metadata-only keys)"""
+    return sum(len(v) for k, v in citations.items() if k not in _COUNT_EXCLUDE)
 
 
 def jaccard_similarity(set1: set, set2: set) -> float:
