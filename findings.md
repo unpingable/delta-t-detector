@@ -178,3 +178,24 @@ Deeper: 89 anchors (vs 101 single, 98 hub) means the selector tends to pick the 
 **The selector is the main hazard**, not the synthesis. When presented with two candidates of varying quality, the 3B model's selector *systematically picks the worse one* for citation integrity. It optimizes for coherence/completeness, not citation accuracy — exactly as predicted, but the effect is in the selection, not the generation.
 
 **Design rule (final)**: Multi-agent citation architectures fail at Qwen-3B scale because the model cannot reliably evaluate citation quality. Neither non-generative selection nor enforced provenance rescues the setup. The aggregation operator (whether generative or selective) lacks the competence to choose truth over plausibility. At this model scale, single-agent is strictly better for citation integrity.
+
+## RFC Namespace Lane (2026-02-10)
+
+**Question**: Does the EG harness generalize beyond DOI/arXiv? RFCs chosen as a low-chaos validation namespace — IETF index, no ambiguity, fewer rate limits. The RFC extractor and resolver were already implemented end-to-end (`detector/utils.py`, `detector/invariants.py`).
+
+**Method**: 15 prompts (`data/canonical_15_rfc.jsonl`), same N=2 + L4 format as the DOI/arXiv canonical lane. Topics span core Internet protocols (HTTP/2, HTTP/3, TLS, DNS, OAuth, JWT, BGP, OSPF, SIP, SMTP, IPv6, ICMPv6, NTP, WebSocket). Run via `coupling.py --topologies single`.
+
+| Namespace | Anchors | Valid | Fab Rate | Mismatch | Lie Rate | Evasion | Verdicts |
+|-----------|---------|-------|----------|----------|----------|---------|----------|
+| DOI/arXiv | 101     | 52    | 17.8%    | 26.7%    | 44.6%    | 0.0%    | 3C / 12F |
+| RFC       | 117     | 117   | **0.0%** | **0.0%** | **0.0%** | 0.0%    | **15C / 0F** |
+
+**Result: Total floor effect.** Zero fabrication, zero mismatch, zero lies, 15/15 CLEAN. The model produces 117 RFC anchors and every single one resolves. This is a categorical difference from DOI/arXiv (44.6% lie rate).
+
+**Why**: RFCs are a memorized namespace. The model has seen RFC numbers in training data far more densely than DOIs or arXiv IDs. RFC numbers are short (4-5 digits), tied to canonical protocol names, and heavily cross-referenced in technical documentation. The model can reliably recall "HTTP/2 = RFC 7540" because it's the kind of factoid that saturates training data. DOIs are long, opaque, and tied to specific publications — the model has to fabricate because it can't recall.
+
+**Implication for detector design**: The EG harness works correctly on RFCs (extracts, resolves, scores), but RFC prompts have zero discriminative power. They're pure controls — useful for verifying that the pipeline doesn't produce false positives, useless for measuring fabrication. The fabrication phenomenon is namespace-dependent: it's a function of the model's training-data coverage for that identifier type, not a universal behavior.
+
+**Implication for governance**: A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations" — it's honest about things it memorized. Citation integrity is per-namespace, not per-model. Any governance policy that treats "passed citation check" as a binary must specify *which* namespace was tested.
+
+**Design rule**: Use DOI/arXiv for fabrication testing (high signal). Use RFC as a false-positive control (should always be CLEAN). If RFC lane ever degrades, something is broken in the pipeline, not in the model.
