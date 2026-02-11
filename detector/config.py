@@ -219,6 +219,7 @@ class DetectorConfig:
     default_model: str = "Qwen/Qwen2.5-3B-Instruct"
     device: str = "auto"  # auto, cuda, mps, cpu
     dtype: str = "auto"   # auto, float16, bfloat16, float32
+    quantize: Optional[str] = None  # None, "4bit", "8bit" (requires bitsandbytes)
     
     # Active risk profile
     active_profile: str = "general"

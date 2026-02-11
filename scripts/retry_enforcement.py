@@ -554,6 +554,8 @@ def main():
                         help="Path to locked corpus JSONL")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Generation temperature (default 0.7, use 0.0 for greedy)")
+    parser.add_argument("--quantize", choices=["4bit", "8bit"], default=None,
+                        help="Quantization mode (requires bitsandbytes)")
     args = parser.parse_args()
 
     from detector.core import DeltaTDetector
@@ -568,6 +570,8 @@ def main():
     print(f"Temperature: {_temperature}")
     config = DetectorConfig()
     config.device = args.device
+    if args.quantize:
+        config.quantize = args.quantize
     detector = DeltaTDetector(model_name=args.model, config=config)
     detector.set_risk_profile("general")
 

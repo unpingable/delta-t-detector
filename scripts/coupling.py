@@ -669,6 +669,8 @@ def main():
     parser.add_argument("--corpus", default="data/canonical_15.jsonl")
     parser.add_argument("--topologies", nargs="+", default=TOPOLOGIES,
                         choices=TOPOLOGIES)
+    parser.add_argument("--quantize", choices=["4bit", "8bit"], default=None,
+                        help="Quantization mode (requires bitsandbytes)")
     args = parser.parse_args()
 
     # Load model once
@@ -679,6 +681,8 @@ def main():
 
     config = DetectorConfig()
     config.device = args.device
+    if args.quantize:
+        config.quantize = args.quantize
     detector = DeltaTDetector(model_name=args.model, config=config)
     detector.set_risk_profile("general")
 

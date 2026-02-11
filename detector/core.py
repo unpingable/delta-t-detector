@@ -173,34 +173,57 @@ class DeltaTDetector:
     def _load_model(self) -> None:
         """Load the language model"""
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        
+
         print(f"Loading model: {self.model_name}")
-        
+
         # Determine device with CUDA > MPS > CPU priority
         self.device = self._select_device(self.config.device)
         print(f"Selected device: {self.device}")
-        
+
         # Determine dtype based on device capabilities
         dtype = self._select_dtype(self.config.dtype, self.device)
         print(f"Selected dtype: {dtype}")
-        
+
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # Load model - CPU first then move to device (cleanest cross-platform approach)
-        # This avoids MPS direct-load quirks and device_map complexity
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            torch_dtype=dtype,
-            low_cpu_mem_usage=True
-        )
-        
-        # Move to target device
-        self.model = self.model.to(self.device)
+
+        # Build quantization config if requested
+        quantize = getattr(self.config, 'quantize', None)
+        quant_config = None
+        if quantize in ("4bit", "8bit"):
+            from transformers import BitsAndBytesConfig
+            if quantize == "4bit":
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=dtype,
+                    bnb_4bit_quant_type="nf4",
+                )
+            else:
+                quant_config = BitsAndBytesConfig(load_in_8bit=True)
+            print(f"Quantization: {quantize}")
+
+        if quant_config is not None:
+            # Quantized load: must use device_map (bitsandbytes requirement)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                quantization_config=quant_config,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+            )
+        else:
+            # Standard load: CPU first then move to device
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True
+            )
+            self.model = self.model.to(self.device)
+
         self.model.eval()
-        
-        print(f"Model loaded on {self.device} with dtype {dtype}")
+
+        print(f"Model loaded on {self.device} with dtype {dtype}"
+              + (f" ({quantize})" if quantize else ""))
     
     def _get_model_device(self) -> torch.device:
         """Get the device the model is actually on (handles edge cases)"""
