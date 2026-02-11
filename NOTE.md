@@ -1,6 +1,19 @@
 # Namespace-Dependent Fabrication in Small Language Models
 
-**Setup.** We probe two small instruction-tuned models — Qwen 2.5 3B-Instruct (3B) and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen results; Finding 7 compares across models.
+## Key Claims
+
+1. Fabrication rate is namespace-dependent (0% RFC → 45% DOI), not model-global
+2. The namespace ordering is model-specific (Qwen and Phi-3 invert on CVE vs PyPI)
+3. Format locking exposes latent fabrication or removes noise, depending on memorization
+4. Models actively avoid checkable channels (format-shift evasion)
+5. Hub/merge topologies amplify fabrication (+19pp); single-agent is strictly better
+6. Retry at temp=0.7 is net-dangerous (67% harm rate); retry at temp=0 is safe (0% harm)
+7. Temperature is a lie amplifier: ~50% of measured fabrication is sampling noise
+8. Models show distinct policy fingerprints: "lies to comply" (Qwen) vs "evades; lies when trapped" (Phi-3)
+
+---
+
+**Setup.** We probe two small instruction-tuned models — Qwen 2.5 3B-Instruct (3B) and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen results; Findings 7-9 compare across models and temperatures.
 
 ## Findings
 
@@ -89,7 +102,7 @@ When evasion is detected, a single strict retry with an UNKNOWN abstention escap
 | Qwen | PyPI locked | 0 | — | — | — |
 | Qwen | CVE locked | 1 | 0 | 1 | 0 |
 
-Qwen never evades on PyPI (nothing to retry). Phi-3 shows all three outcomes on PyPI: comply, abstain, fabricate. On CVE (unmemorized for Phi-3), retry uniformly converts to fabrication — the model lies when forced on things it doesn't know. Zero persistent evasion: one retry is sufficient. UNKNOWN sentinels were used only by Phi-3 on PyPI (1/3 retries), never on CVE. The abstention escape hatch is model- and namespace-dependent.
+Qwen never evades on PyPI (nothing to retry). Phi-3 shows all three outcomes on PyPI: comply, abstain, fabricate. On CVE (unmemorized for Phi-3), retry uniformly converts to fabrication — the model lies when forced on things it doesn't know. UNKNOWN sentinels were used only by Phi-3 on PyPI (1/3 retries), never on CVE — the abstention escape hatch is model- and namespace-dependent.
 
 ### 9. Temperature separates sampling noise from knowledge boundaries
 
@@ -102,7 +115,9 @@ At temperature=0 (greedy), retry-induced fabrication disappears completely:
 | 1st-attempt FAIL on PyPI | 3/20 | **0/20** |
 | 1st-attempt FAIL on CVE | 3/20 | **3/20** |
 
-PyPI fabrication at temp=0.7 was ~100% sampling noise (drops to zero at temp=0). CVE fabrication persists — it's a genuine knowledge boundary. The retry WARN→FAIL conversion is entirely sampling-driven: at temp=0, retry is always safe (resolves clean or persists as evasion). Persistent evasion (WARN→WARN) appears only at temp=0, showing that temperature masks the model's true refusal rate by converting deterministic refusals into probabilistic fabrications.
+PyPI fabrication at temp=0.7 was ~100% sampling noise (drops to zero at temp=0). CVE fabrication persists — it's a genuine knowledge boundary. Persistent evasion (WARN→WARN) appears only at temp=0, showing that temperature masks the model's true refusal rate by converting deterministic refusals into probabilistic fabrications.
+
+Fabrication has two sources: **sampling-accessible fabrication** (goes away at greedy — the model's mode is correct but temperature pushes it into plausible-looking errors) and **knowledge-boundary failures** (persist at greedy — the mode itself is wrong).
 
 ## Design Implications
 
@@ -112,13 +127,13 @@ PyPI fabrication at temp=0.7 was ~100% sampling noise (drops to zero at temp=0).
 
 3. **Don't aggregate with LLMs.** Hub/merge topologies amplify fabrication. If you must aggregate, use non-generative selection or code-level passthrough, not LLM rewriting. The merge operator creates new lies.
 
-4. **Citation integrity claims must specify namespace and model.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The namespace ordering itself varies across model families (Qwen: CVE easy, PyPI hard; Phi-3: reversed). Governance policies must test the specific model being deployed against the namespaces that matter for their domain.
+4. **Citation integrity claims must specify namespace and model.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The namespace ordering itself varies across model families. Governance policies must test the specific model being deployed against the namespaces that matter for their domain.
 
-5. **Treat timing/confidence signals as telemetry, not gates.** Token-level confidence saturates too fast in small models to discriminate truth from fabrication. Anchors with external oracles are the primary sensor. Temporal coherence is a secondary triage signal, never a standalone detector.
+5. **Two-stage decoding policy.** Generate at operational temperature, but any enforcement retry or "produce anchors" step must be greedy (temp=0). Temperature is risk budget; do not spend risk budget on falsifiable identifiers. First answer can be chatty. Anything that must be checkable is greedy.
 
-6. **Offer abstention escape hatches, but don't trust them blindly.** UNKNOWN sentinels (`pypi:UNKNOWN==0.0.0`, `CVE-0000-0000`) let models signal "I don't know" instead of fabricating. But usage is model- and namespace-dependent: Phi-3 abstains on PyPI, fabricates on CVE. Retry on unmemorized namespaces is net-dangerous at temp=0.7.
+6. **Treat retry as increasing decisiveness, not truth.** Never act on a retry without verification. At temp=0.7, retry is net-dangerous (67% intervention harm rate). At temp=0, retry is safe (0% harm, 86% benefit). Pair retry with stronger verification, not blind acceptance.
 
-7. **If you retry, use greedy decoding.** At temp=0.7, retry harms 67% of the time (converts evasion to fabrication). At temp=0, retry is safe — 86% benefit, 0% harm. The safe policy: first attempt at operational temperature, retry at temp=0.
+7. **Treat abstention as a first-class outcome.** UNKNOWN sentinels let models signal "I don't know." Usage is model- and namespace-dependent. A model that mostly abstains under retry is safer than one that mostly fabricates. Track abstention rate alongside fabrication and evasion.
 
 ## Replication
 
