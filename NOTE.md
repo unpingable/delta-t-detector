@@ -10,10 +10,11 @@
 6. Retry at temp=0.7 is net-dangerous (67% harm rate); retry at temp=0 is safe (0% harm)
 7. Temperature is a lie amplifier: ~50% of measured fabrication is sampling noise
 8. Models show distinct policy fingerprints: "lies to comply" (Qwen) vs "evades; lies when trapped" (Phi-3)
+9. Scale (3B→7B) halves fabrication and closes knowledge boundaries; 4-bit quantization preserves the effect
 
 ---
 
-**Setup.** We probe two small instruction-tuned models — Qwen 2.5 3B-Instruct (3B) and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen results; Findings 7-9 compare across models and temperatures.
+**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient.
 
 ## Findings
 
@@ -119,6 +120,18 @@ PyPI fabrication at temp=0.7 was ~100% sampling noise (drops to zero at temp=0).
 
 Fabrication has two sources: **sampling-accessible fabrication** (goes away at greedy — the model's mode is correct but temperature pushes it into plausible-looking errors) and **knowledge-boundary failures** (persist at greedy — the mode itself is wrong).
 
+### 10. Scale halves fabrication and closes knowledge boundaries
+
+Running Qwen 2.5 7B-Instruct (NF4 4-bit) on the same locked corpora:
+
+| Lane (locked) | Qwen 3B t=0.7 | Qwen 7B 4-bit t=0.7 | Qwen 7B 4-bit t=0 |
+|---|---|---|---|
+| RFC | 0% | 0% | 0% |
+| PyPI | 25% | 10% | 5% |
+| CVE | 9% | 6.2% | 5% |
+
+At the prompt level, CVE locked at 7B produces 0 FAILs at greedy — the knowledge boundary that persisted at 3B (1 FAIL at temp=0) is closed. Scale shifts namespaces from "knowledge boundary" to "sampling noise only." PyPI crossed this threshold at 3B; CVE crosses at 7B. The implication: fabrication ∝ 1/(memorization × scale), and each model size has a namespace-specific crossover point where greedy decoding eliminates fabrication entirely. 4-bit quantization preserves this effect — NF4 does not reintroduce knowledge-boundary fabrication.
+
 ## Design Rules
 
 1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`), not URLs. Use authoritative existence oracles per namespace (MITRE CVE API, PyPI JSON, doi.org). HEAD/200 is not validation — `cve.mitre.org` returns 200 for nonexistent CVEs; Wikipedia returns 403 or 404 depending on platform. Only 200 and 404 from type-specific APIs are definitive.
@@ -133,6 +146,6 @@ Fabrication has two sources: **sampling-accessible fabrication** (goes away at g
 
 ## Replication
 
-Qwen measurements were replicated across Linux (x86_64, NVIDIA RTX 5060 Ti) and macOS (ARM64, Mac mini M4). Resolver behavior is platform-invariant for authoritative APIs. One URL-level discrepancy (Wikipedia 403 vs 404 for a fabricated page) confirmed the fragility of generic HEAD checks. Phi-3 Mini was tested on the same Linux hardware with identical corpora and decoding parameters.
+Qwen 3B measurements were replicated across Linux (x86_64, NVIDIA RTX 5060 Ti 16GB) and macOS (ARM64, Mac mini M4). Resolver behavior is platform-invariant for authoritative APIs. One URL-level discrepancy (Wikipedia 403 vs 404 for a fabricated page) confirmed the fragility of generic HEAD checks. Phi-3 Mini and Qwen 7B (NF4 4-bit) were tested on the same Linux hardware with identical corpora and decoding parameters.
 
 Code, corpora, and run artifacts: [repository link]

@@ -671,7 +671,12 @@ def main():
                         choices=TOPOLOGIES)
     parser.add_argument("--quantize", choices=["4bit", "8bit"], default=None,
                         help="Quantization mode (requires bitsandbytes)")
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="Generation temperature (default 0.7, use 0.0 for greedy)")
     args = parser.parse_args()
+
+    global TEMPERATURE
+    TEMPERATURE = args.temperature if args.temperature > 0 else 0.01  # pseudo-greedy
 
     # Load model once
     from detector.core import DeltaTDetector
