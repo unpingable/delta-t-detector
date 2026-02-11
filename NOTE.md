@@ -119,21 +119,17 @@ PyPI fabrication at temp=0.7 was ~100% sampling noise (drops to zero at temp=0).
 
 Fabrication has two sources: **sampling-accessible fabrication** (goes away at greedy — the model's mode is correct but temperature pushes it into plausible-looking errors) and **knowledge-boundary failures** (persist at greedy — the mode itself is wrong).
 
-## Design Implications
+## Design Rules
 
-1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`) rather than accepting URLs. Format locking exposes fabrication that URL substitution conceals.
+1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`), not URLs. Use authoritative existence oracles per namespace (MITRE CVE API, PyPI JSON, doi.org). HEAD/200 is not validation — `cve.mitre.org` returns 200 for nonexistent CVEs; Wikipedia returns 403 or 404 depending on platform. Only 200 and 404 from type-specific APIs are definitive.
 
-2. **Use authoritative existence oracles.** Every namespace needs its own validator. HEAD/200 is necessary but not sufficient. HTTP 401/403 is ambiguous (platform-dependent). Only 200 and 404 from authoritative APIs are definitive.
+2. **Retry is an intervention, not a better sample.** At temp=0.7, retry converts evasion to fabrication 67% of the time. Never act on a retry without verification. Pair with stronger validation, not blind acceptance. Abstention (`UNKNOWN` sentinels) is a first-class outcome — a model that refuses is safer than one that fabricates.
 
-3. **Don't aggregate with LLMs.** Hub/merge topologies amplify fabrication. If you must aggregate, use non-generative selection or code-level passthrough, not LLM rewriting. The merge operator creates new lies.
+3. **Gate steps run greedy.** Generate the first answer at operational temperature. Any enforcement retry, "produce anchors" step, or checkable-output step must be greedy (temp=0). Temperature is risk budget; don't spend it on falsifiable identifiers.
 
-4. **Citation integrity claims must specify namespace and model.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The namespace ordering itself varies across model families. Governance policies must test the specific model being deployed against the namespaces that matter for their domain.
+4. **The namespace spectrum is model-indexed.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The ordering itself varies across model families (Qwen: CVE easy, PyPI hard; Phi-3: reversed). Governance policies must test the specific model against the specific namespaces that matter for their domain. Don't transfer results across model families.
 
-5. **Two-stage decoding policy.** Generate at operational temperature, but any enforcement retry or "produce anchors" step must be greedy (temp=0). Temperature is risk budget; do not spend risk budget on falsifiable identifiers. First answer can be chatty. Anything that must be checkable is greedy.
-
-6. **Treat retry as increasing decisiveness, not truth.** Never act on a retry without verification. At temp=0.7, retry is net-dangerous (67% intervention harm rate). At temp=0, retry is safe (0% harm, 86% benefit). Pair retry with stronger verification, not blind acceptance.
-
-7. **Treat abstention as a first-class outcome.** UNKNOWN sentinels let models signal "I don't know." Usage is model- and namespace-dependent. A model that mostly abstains under retry is safer than one that mostly fabricates. Track abstention rate alongside fabrication and evasion.
+5. **Don't aggregate citations with LLMs.** Hub/merge topologies amplify fabrication (+19pp). The merge operator creates new lies. Single-agent is strictly better for citation integrity at 3-4B scale. If you must aggregate, use code-level passthrough, not LLM rewriting.
 
 ## Replication
 
