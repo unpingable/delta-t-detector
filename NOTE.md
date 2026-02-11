@@ -78,6 +78,19 @@ Running the same four-lane suite on Phi-3 Mini 3.8B-Instruct:
 
 The existence of namespace-dependent fabrication is universal, but the ordering is model-specific. CVE and PyPI are inverted: Qwen memorized CVEs but not PyPI versions; Phi-3 evades PyPI claims and fabricates CVEs. Phi-3's 0% PyPI fabrication comes from evasion (7/10 prompts triggered format-shift or missing-anchor warnings), not honest compliance. When it cannot evade (CVE format is harder to dodge), fabrication jumps to 41%. A governance policy calibrated on one model family will be exactly wrong for another.
 
+### 8. Retry enforcement reveals a three-way behavioral split
+
+When evasion is detected, a single strict retry with an UNKNOWN abstention escape hatch (e.g. `pypi:UNKNOWN==0.0.0`) reveals three distinct outcomes:
+
+| Model | Corpus | Retries | → Clean | → Fail | → Abstain |
+|---|---|---|---|---|---|
+| Phi-3 | PyPI locked | 3 | 1 | 1 | 1 |
+| Phi-3 | CVE locked | 2 | 0 | 2 | 0 |
+| Qwen | PyPI locked | 0 | — | — | — |
+| Qwen | CVE locked | 1 | 0 | 1 | 0 |
+
+Qwen never evades on PyPI (nothing to retry). Phi-3 shows all three outcomes on PyPI: comply, abstain, fabricate. On CVE (unmemorized for Phi-3), retry uniformly converts to fabrication — the model lies when forced on things it doesn't know. Zero persistent evasion: one retry is sufficient. UNKNOWN sentinels were used only by Phi-3 on PyPI (1/3 retries), never on CVE. The abstention escape hatch is model- and namespace-dependent.
+
 ## Design Implications
 
 1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`) rather than accepting URLs. Format locking exposes fabrication that URL substitution conceals.
@@ -89,6 +102,8 @@ The existence of namespace-dependent fabrication is universal, but the ordering 
 4. **Citation integrity claims must specify namespace and model.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The namespace ordering itself varies across model families (Qwen: CVE easy, PyPI hard; Phi-3: reversed). Governance policies must test the specific model being deployed against the namespaces that matter for their domain.
 
 5. **Treat timing/confidence signals as telemetry, not gates.** Token-level confidence saturates too fast in small models to discriminate truth from fabrication. Anchors with external oracles are the primary sensor. Temporal coherence is a secondary triage signal, never a standalone detector.
+
+6. **Offer abstention escape hatches, but don't trust them blindly.** UNKNOWN sentinels (`pypi:UNKNOWN==0.0.0`, `CVE-0000-0000`) let models signal "I don't know" instead of fabricating. But usage is model- and namespace-dependent: Phi-3 abstains on PyPI, fabricates on CVE. Retry on unmemorized namespaces is net-dangerous — it converts evasion to lies more often than to honest compliance.
 
 ## Replication
 
