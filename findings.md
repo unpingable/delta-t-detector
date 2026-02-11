@@ -494,14 +494,44 @@ RFC is a universal floor (both 0%). DOI is universally bad (both high). But CVE 
 | Fabricate | 25% | 0% | 9% | 41% |
 | Evade | 0% | high (7/10) | 0% | 10% (1/10) |
 
+### Soft vs Locked: Cross-Model Lock Principle
+
+Running PyPI soft and CVE soft on Phi-3 reveals the lock principle is model-invariant in *form* but model-specific in *which namespace it applies to*:
+
+| Corpus | Qwen Soft → Locked | Phi-3 Soft → Locked |
+|--------|-------------------|---------------------|
+| PyPI | 13% → **25%** (lock ↑ fab) | 12% → **0%** (lock ↑ evasion) |
+| CVE | 15% → **9%** (lock ↓ fab) | 25% → **41%** (lock ↑ fab) |
+
+**PyPI**: Both models evade under soft prompting (~12-13% fab, significant WARNs). Under lock, Qwen complies and fabricates (25%); Phi-3 evades even harder (0% fab but 7/10 WARN). Phi-3's evasion is more robust — it maintains noncompliance even under format lock.
+
+**CVE**: Qwen's CVE fab decreases under lock (URLs were the noise source). Phi-3's CVE fab *increases* dramatically under lock (25% → 41%) — same pattern as Qwen's PyPI lock. For Phi-3, CVEs are the unmemorized namespace where lock exposes latent fabrication.
+
+The lock principle generalizes: **locking increases fabrication when it forces unmemorized claims, regardless of model**. The difference is *which namespaces are memorized*.
+
+### Two Behavioral Archetypes
+
+| | Qwen 2.5 3B | Phi-3 Mini 3.8B |
+|---|---|---|
+| **Strategy** | "Lies to comply" | "Evades to avoid falsification; lies when trapped" |
+| **PyPI locked** | Complies, fabricates 25% | Evades (7/10 WARN), fabricates 0% |
+| **CVE locked** | Complies, fabricates 9% | Can't evade, fabricates 41% |
+| **Governance need** | Stronger *verification* | Stronger *format enforcement / retry* |
+
+This is governance-relevant: different models need different gates. A verification-only pipeline catches Qwen's lies but misses Phi-3's evasion. A format-enforcement pipeline catches Phi-3's dodging but doesn't help with Qwen's plausible fabrications.
+
 ### Implications
 
 1. **Namespace spectrum is model-dependent.** The *existence* of namespace-dependent fabrication is universal (both models show it), but the *ordering* is model-specific. You cannot assume "CVE is easy, PyPI is hard" — that's a Qwen-specific finding.
 
 2. **Evasion is a model-level trait.** Phi-3 is a more evasive model overall. Under PyPI pressure, it dodges rather than fabricates. This is arguably *safer* (evasion is detectable, fabrication isn't) but looks like noncompliance to a user. Models differ not just in what they memorized, but in their fabrication/evasion preference.
 
-3. **DOI remains universally hard.** Both models fabricate DOIs at high rates (18-37%). DOI is the most reliable fabrication test across model families — it's sparse enough that no 3-4B model memorizes it well.
+3. **The lock principle is universal but model-indexed.** Locking increases fab when forcing unmemorized claims — for Qwen that's PyPI versions, for Phi-3 that's CVE IDs. The principle transfers; the namespace it applies to doesn't.
 
-4. **RFC remains a universal control.** Both models score 0% fabrication on RFC. If a model fails the RFC lane, the pipeline is broken.
+4. **DOI remains universally hard.** Both models fabricate DOIs at high rates (18-37%). DOI is the most reliable fabrication test across model families — it's sparse enough that no 3-4B model memorizes it well.
 
-5. **Cross-model testing is mandatory.** A governance policy calibrated on Qwen (CVE=easy, PyPI=hard) would be exactly wrong for Phi-3. Any deployment-level policy must test the specific model being deployed, not transfer results from another model family.
+5. **RFC remains a universal control.** Both models score 0% fabrication on RFC. If a model fails the RFC lane, the pipeline is broken.
+
+6. **Cross-model testing is mandatory.** A governance policy calibrated on Qwen (CVE=easy, PyPI=hard) would be exactly wrong for Phi-3. Any deployment-level policy must test the specific model being deployed, not transfer results from another model family.
+
+7. **The evasion taxonomy is the main character.** `expected_anchor_type` + `EVASION_FORMAT_SHIFT` / `EVASION_MISSING_ANCHORS` are what distinguish Phi-3's "honest-looking 0%" from real honesty. Without evasion detection, Phi-3's PyPI locked result looks perfect. With it, you see it's noncompliance.
