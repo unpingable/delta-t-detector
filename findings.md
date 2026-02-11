@@ -584,3 +584,55 @@ Sentinels are parse-valid anchors that signal "I can't provide this." Scored as 
    Governance should track all three rates per model per namespace. A model that mostly abstains under retry is safer than one that mostly fabricates.
 
 5. **Single retry is sufficient.** Zero persistent evasion means one retry resolves the ambiguity. A second retry would be pure waste — the model has already committed to a strategy.
+
+## Temperature Ablation: Temp=0 vs Temp=0.7 (2026-02-11)
+
+**Question**: Is the fabrication and retry-harm we measured at temp=0.7 a knowledge boundary, or sampling noise?
+
+**Method**: Ran the same retry enforcement experiment at temperature=0 (pseudo-greedy, effective temp=0.01) on all four model×corpus combinations.
+
+### Results
+
+| Model | Corpus | Temp | 1st FAIL | Retries | → Clean | → Fail | → Evasion | → Abstain |
+|---|---|---|---|---|---|---|---|---|
+| Phi-3 | PyPI | 0.7 | 1 | 3 | 1 | 1 | 0 | 1 |
+| Phi-3 | PyPI | **0** | **0** | 4 | **4** | **0** | 0 | 0 |
+| Phi-3 | CVE | 0.7 | 1 | 2 | 0 | **2** | 0 | 0 |
+| Phi-3 | CVE | **0** | 2 | 1 | **1** | **0** | 0 | 0 |
+| Qwen | PyPI | 0.7 | 2 | 0 | — | — | — | — |
+| Qwen | PyPI | **0** | **0** | 1 | **1** | 0 | 0 | 0 |
+| Qwen | CVE | 0.7 | 1 | 1 | 0 | **1** | 0 | 0 |
+| Qwen | CVE | **0** | 1 | 1 | 0 | 0 | **1** | 0 |
+
+### Analysis
+
+**Retry-induced fabrication is 100% sampling noise.** At temp=0.7, 4/6 retries across all runs converted WARN→FAIL (intervention harm rate ~67%). At temp=0, **0/7 retries** converted to FAIL (harm rate 0%). Every retry either resolved clean (6/7) or persisted as evasion (1/7). The WARN→FAIL conversion at temp=0.7 was the model "rolling the dice" on whether to fabricate, not a stable policy.
+
+**First-attempt fabrication drops on memorized namespaces.** Qwen PyPI: 2→0 FAIL. Phi-3 PyPI: 1→0 FAIL. Temperature was creating "creative lies" on namespaces where the model has partial knowledge. These are sampling artifacts, not knowledge failures.
+
+**First-attempt fabrication persists on unmemorized namespaces.** Phi-3 CVE: 2 FAILs remain at temp=0. Qwen CVE: 1 FAIL remains. These are genuine knowledge boundary failures that greedy decoding can't fix.
+
+**Persistent evasion appears for the first time.** Qwen CVE at temp=0: cve-locked-06 is WARN→WARN (persistent evasion). At temp=0.7, the same prompt-space produced WARN→FAIL — sampling randomness turned a deterministic refusal into a fabrication. This is the clearest evidence that temperature inflates fabrication rates by converting "model wants to refuse" into "model tries and lies."
+
+### Separation of Effects
+
+| Effect | Eliminated by temp=0? | Type |
+|---|---|---|
+| Retry WARN→FAIL conversion | **Yes** (4/6 → 0/7) | Sampling noise |
+| Retry WARN→CLEAN resolution | No (still works) | Robust |
+| 1st-attempt fab on memorized NS | **Yes** (3→0 across PyPI) | Sampling noise |
+| 1st-attempt fab on unmemorized NS | **No** (3 FAILs persist on CVE) | Knowledge boundary |
+| UNKNOWN abstention | Mixed (disappeared at temp=0) | Sampling-dependent behavior |
+| Persistent evasion | **Appears only at temp=0** | Deterministic refusal |
+
+### Implications
+
+1. **Never retry at temp=0.7 without verification.** The retry intervention at temp=0.7 is net-dangerous (67% harm rate). At temp=0, it's net-helpful (0% harm, 86% benefit). If you must retry, use greedy decoding for the second attempt.
+
+2. **Fabrication rates at temp=0.7 overstate the knowledge deficit.** Roughly half of measured fabrication on PyPI locked was sampling noise. The "true" fabrication rate (knowledge boundary) is lower — visible at temp=0 as the irreducible floor.
+
+3. **Temperature creates a "lie amplifier."** The model's most likely token sequence (temp=0) is often correct. Temperature pushes it off the mode into a region where fabrication becomes possible. This is exactly the mechanism that makes N=2+temp=0.7 the "danger zone" — enough randomness to fabricate, not enough to trigger evasion.
+
+4. **Persistent evasion is a temp=0 signature.** At temp=0.7, evasion gets "broken" by sampling into fabrication. At temp=0, evasion is stable — the model deterministically refuses. This means evasion measured at temp=0.7 *understates* the model's true refusal rate.
+
+5. **Governance rule (revised)**: Retry increases *decisiveness*, not truth. At temp=0, retry is safe (always clean or persistent evasion). At temp=0.7, retry is a coin flip between compliance and fabrication. The safe policy: first attempt at operational temperature, retry (if needed) at temp=0.

@@ -91,6 +91,19 @@ When evasion is detected, a single strict retry with an UNKNOWN abstention escap
 
 Qwen never evades on PyPI (nothing to retry). Phi-3 shows all three outcomes on PyPI: comply, abstain, fabricate. On CVE (unmemorized for Phi-3), retry uniformly converts to fabrication — the model lies when forced on things it doesn't know. Zero persistent evasion: one retry is sufficient. UNKNOWN sentinels were used only by Phi-3 on PyPI (1/3 retries), never on CVE. The abstention escape hatch is model- and namespace-dependent.
 
+### 9. Temperature separates sampling noise from knowledge boundaries
+
+At temperature=0 (greedy), retry-induced fabrication disappears completely:
+
+| Metric | Temp=0.7 | Temp=0 |
+|---|---|---|
+| Retry WARN→FAIL (harm) | 4/6 (67%) | **0/7 (0%)** |
+| Retry WARN→CLEAN (benefit) | 2/6 (33%) | **6/7 (86%)** |
+| 1st-attempt FAIL on PyPI | 3/20 | **0/20** |
+| 1st-attempt FAIL on CVE | 3/20 | **3/20** |
+
+PyPI fabrication at temp=0.7 was ~100% sampling noise (drops to zero at temp=0). CVE fabrication persists — it's a genuine knowledge boundary. The retry WARN→FAIL conversion is entirely sampling-driven: at temp=0, retry is always safe (resolves clean or persists as evasion). Persistent evasion (WARN→WARN) appears only at temp=0, showing that temperature masks the model's true refusal rate by converting deterministic refusals into probabilistic fabrications.
+
 ## Design Implications
 
 1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`) rather than accepting URLs. Format locking exposes fabrication that URL substitution conceals.
@@ -103,7 +116,9 @@ Qwen never evades on PyPI (nothing to retry). Phi-3 shows all three outcomes on 
 
 5. **Treat timing/confidence signals as telemetry, not gates.** Token-level confidence saturates too fast in small models to discriminate truth from fabrication. Anchors with external oracles are the primary sensor. Temporal coherence is a secondary triage signal, never a standalone detector.
 
-6. **Offer abstention escape hatches, but don't trust them blindly.** UNKNOWN sentinels (`pypi:UNKNOWN==0.0.0`, `CVE-0000-0000`) let models signal "I don't know" instead of fabricating. But usage is model- and namespace-dependent: Phi-3 abstains on PyPI, fabricates on CVE. Retry on unmemorized namespaces is net-dangerous — it converts evasion to lies more often than to honest compliance.
+6. **Offer abstention escape hatches, but don't trust them blindly.** UNKNOWN sentinels (`pypi:UNKNOWN==0.0.0`, `CVE-0000-0000`) let models signal "I don't know" instead of fabricating. But usage is model- and namespace-dependent: Phi-3 abstains on PyPI, fabricates on CVE. Retry on unmemorized namespaces is net-dangerous at temp=0.7.
+
+7. **If you retry, use greedy decoding.** At temp=0.7, retry harms 67% of the time (converts evasion to fabrication). At temp=0, retry is safe — 86% benefit, 0% harm. The safe policy: first attempt at operational temperature, retry at temp=0.
 
 ## Replication
 

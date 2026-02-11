@@ -138,8 +138,11 @@ EVASION_WARN_TYPES = {"EVASION_FORMAT_SHIFT", "EVASION_MISSING_ANCHORS", "NEED_E
 
 # Same generation params as coupling.py
 MAX_NEW_TOKENS = 250
-TEMPERATURE = 0.7
+DEFAULT_TEMPERATURE = 0.7
 SEED_BASE = 42
+
+# Module-level temperature (set from CLI args before experiment runs)
+_temperature = DEFAULT_TEMPERATURE
 
 
 # ---------------------------------------------------------------------------
@@ -153,16 +156,23 @@ def _derive_seed(prompt_id: str, attempt: str) -> int:
 
 
 def _generate(detector, formatted_prompt: str, seed: int) -> Tuple[str, float]:
-    """Generate with fixed seed and return (text, infer_ms)."""
+    """Generate with fixed seed and return (text, infer_ms).
+
+    For temperature=0, uses a small value (0.01) to approximate greedy
+    decoding through multinomial sampling (core.py's generate_with_metrics
+    doesn't support argmax natively).
+    """
     import torch
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
+    # Use 0.01 as pseudo-greedy (avoids division-by-zero in softmax)
+    effective_temp = _temperature if _temperature > 0 else 0.01
     t0 = time.monotonic()
     trace = detector.generate_with_metrics(
         formatted_prompt,
         max_new_tokens=MAX_NEW_TOKENS,
-        temperature=TEMPERATURE,
+        temperature=effective_temp,
     )
     infer_ms = (time.monotonic() - t0) * 1000
     return trace.text, infer_ms
@@ -459,13 +469,25 @@ def run_retry_experiment(
         for r in results:
             f.write(json.dumps(r, default=str) + "\n")
 
+    # Compute intervention rates
+    rt = counters["retry_triggered"]
+    intervention_rates = {}
+    if rt > 0:
+        intervention_rates = {
+            "intervention_harm_rate": counters.get("converted_to_fail", 0) / rt,
+            "intervention_benefit_rate": counters.get("resolved_clean", 0) / rt,
+            "abstention_rate": counters.get("abstained", 0) / rt,
+        }
+
     summary = {
         "run_id": run_id,
         "run_dir": str(run_dir),
         "corpus": corpus_path,
         "model": model_name,
+        "temperature": _temperature,
         "n_prompts": len(prompts),
         "counters": counters,
+        "intervention_rates": intervention_rates,
         "per_prompt": [
             {
                 "prompt_id": r["prompt_id"],
@@ -491,6 +513,7 @@ def print_summary(summary: dict):
     print(f"{'='*60}")
     print(f"  Model:   {summary['model']}")
     print(f"  Corpus:  {summary['corpus']}")
+    print(f"  Temp:    {summary.get('temperature', 0.7)}")
     print(f"  Prompts: {c['total']}")
     print()
     print(f"  No retry needed (non-evasion): {c['no_retry_needed']}")
@@ -500,6 +523,12 @@ def print_summary(summary: dict):
         print(f"    → converted_to_fail:         {c.get('converted_to_fail', 0)}")
         print(f"    → persistent_evasion:        {c.get('persistent_evasion', 0)}")
         print(f"    → abstained (UNKNOWN):       {c.get('abstained', 0)}")
+        ir = summary.get("intervention_rates", {})
+        if ir:
+            print()
+            print(f"  Intervention harm rate:    {ir['intervention_harm_rate']:.0%}")
+            print(f"  Intervention benefit rate: {ir['intervention_benefit_rate']:.0%}")
+            print(f"  Abstention rate:           {ir['abstention_rate']:.0%}")
     print()
 
     # Per-prompt detail
@@ -523,13 +552,20 @@ def main():
     parser.add_argument("--device", default="auto")
     parser.add_argument("--corpus", required=True,
                         help="Path to locked corpus JSONL")
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="Generation temperature (default 0.7, use 0.0 for greedy)")
     args = parser.parse_args()
 
     from detector.core import DeltaTDetector
     from detector.config import DetectorConfig
     from detector.eval import load_jsonl
 
+    # Set module-level temperature before any generation
+    global _temperature
+    _temperature = args.temperature
+
     print(f"Loading model: {args.model}")
+    print(f"Temperature: {_temperature}")
     config = DetectorConfig()
     config.device = args.device
     detector = DeltaTDetector(model_name=args.model, config=config)
