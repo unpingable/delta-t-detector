@@ -3,14 +3,15 @@
 Overnight harness: lane-based eval suite with nightly report.
 
 Lanes:
-  0. Canary    — tiny corpus, fast, catches regressions (~5 min)
-  1. Baseline  — full v3 corpus, default config (~25 min)
-  2. Citations — citation-forcing corpus, exercises Inv-3 (~15 min)
-  3. Ladder    — citation ladder L1-L6, 60 prompts (~30 min)
+  0. Canary     — tiny corpus, fast, catches regressions (~5 min)
+  1. Baseline   — full v3 corpus, default config (~25 min)
+  2. Citations  — citation-forcing corpus, exercises Inv-3 (~15 min)
+  3. Ladder     — citation ladder L1-L6, 60 prompts (~30 min)
   4. N-Pressure — N=1,2,3,5 citation pressure curve (~10 min)
-  5. Canonical — N=2 + L4 regression lane, max fabrication sensitivity (~8 min)
-  6. Sweep     — stability sweep: temp × n_perturb grid (~2 hr)
-  7. Replay    — CPU-only threshold scan on all new runs (minutes)
+  5. Canonical  — N=2 + L4 regression lane, max fabrication sensitivity (~8 min)
+  6. Core       — namespace spectrum: RFC + PyPI + CVE (soft+locked) (~20 min)
+  7. Sweep      — stability sweep: temp × n_perturb grid (~2 hr)
+  8. Replay     — CPU-only threshold scan on all new runs (minutes)
 
 Usage:
     bin/overnight.sh                    # full suite
@@ -45,6 +46,15 @@ CORPORA = {
     "n_pressure": "data/n_pressure_20.jsonl",
     "canonical": "data/canonical_15.jsonl",
 }
+
+# Core suite: namespace spectrum + format lock regression
+CORE_CORPORA = [
+    ("core_rfc",         "data/canonical_15_rfc.jsonl"),
+    ("core_pypi_soft",   "data/canonical_15_pypi_n2.jsonl"),
+    ("core_pypi_locked", "data/canonical_10_pypi_locked.jsonl"),
+    ("core_cve_soft",    "data/canonical_15_cve_n2.jsonl"),
+    ("core_cve_locked",  "data/canonical_10_cve_locked.jsonl"),
+]
 MODEL = "Qwen/Qwen2.5-3B-Instruct"
 DEVICE = "cuda"
 PROFILE_NAME = "general"
@@ -53,7 +63,7 @@ PROFILE_NAME = "general"
 TEMP_GRID = [0.5, 0.7, 0.9]
 NPERTURB_GRID = [3, 5]
 
-ALL_LANES = ["canary", "baseline", "citations", "ladder", "n_pressure", "canonical", "sweep", "replay"]
+ALL_LANES = ["canary", "baseline", "citations", "ladder", "n_pressure", "canonical", "core", "sweep", "replay"]
 
 
 def run_one_eval(detector, corpus_path, profile_name, label=""):
@@ -67,7 +77,8 @@ def run_one_eval(detector, corpus_path, profile_name, label=""):
         n_items += 1
         result = detector.detect_multi_invariant(
             item.prompt, test_semantic=True,
-            expected_min_anchors=item.expected_min_anchors)
+            expected_min_anchors=item.expected_min_anchors,
+            expected_anchor_type=getattr(item, 'expected_anchor_type', None))
         features = result.features or {}
         anomaly_score = None
         flags = compute_guard_flags(
@@ -435,7 +446,17 @@ def main():
         else:
             print(f"\nSkipping canonical lane: {corpus} not found")
 
-    # --- Lane 6: Sweep ---
+    # --- Lane 6: Core (namespace spectrum + format lock regression) ---
+    if "core" in lanes and detector:
+        for sub_label, corpus in CORE_CORPORA:
+            if Path(corpus).exists():
+                rd = run_lane(detector, config, "core", corpus,
+                              args.profile, sub_label, results)
+                new_run_dirs.append(rd)
+            else:
+                print(f"\n  Skipping {sub_label}: {corpus} not found")
+
+    # --- Lane 7: Sweep ---
     if "sweep" in lanes and detector:
         original_temp_base = config.temperature_base
         original_temp_step = config.temperature_step
@@ -456,7 +477,7 @@ def main():
         config.temperature_step = original_temp_step
         profile.n_perturbations = original_n_perturb
 
-    # --- Lane 4: Replay ---
+    # --- Lane 8: Replay ---
     if "replay" in lanes and new_run_dirs:
         run_replay(new_run_dirs, results)
 

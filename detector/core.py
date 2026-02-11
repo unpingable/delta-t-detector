@@ -606,6 +606,7 @@ class DeltaTDetector:
         test_semantic: bool = True,
         test_irreversibility: bool = False,
         expected_min_anchors: Optional[int] = None,
+        expected_anchor_type: Optional[str] = None,
     ) -> DetectionResult:
         """
         Full multi-invariant detection
@@ -677,7 +678,8 @@ class DeltaTDetector:
         
         # Aggregate results
         multi_result = self.multi_invariant_validator.aggregate(
-            results, expected_min_anchors=expected_min_anchors)
+            results, expected_min_anchors=expected_min_anchors,
+            expected_anchor_type=expected_anchor_type)
         
         # Compute temporal debt
         debt = compute_temporal_debt(features, weights=profile.temporal_debt_weights, baseline=self._current_baseline)
