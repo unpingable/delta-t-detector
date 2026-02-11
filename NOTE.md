@@ -1,6 +1,6 @@
 # Namespace-Dependent Fabrication in Small Language Models
 
-**Setup.** We probe a 3B-parameter instruction-tuned model (Qwen 2.5 3B-Instruct) for citation fabrication across five identifier namespaces: RFC, CVE, PyPI package versions, DOI, and arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output.
+**Setup.** We probe two small instruction-tuned models — Qwen 2.5 3B-Instruct (3B) and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen results; Finding 7 compares across models.
 
 ## Findings
 
@@ -65,6 +65,19 @@ Causal decomposition of hub's +19pp fabrication uplift: selection pressure (+13p
 
 N=2 maximizes plausible fabrication with zero evasion. N=1 is too easy (model complies honestly). N=5 overwhelms the model into evasion. The attractor for "lies that pass casual inspection" is N=2.
 
+### 7. The namespace spectrum is model-specific
+
+Running the same four-lane suite on Phi-3 Mini 3.8B-Instruct:
+
+| Lane (locked) | Qwen 2.5 3B | Phi-3 Mini 3.8B |
+|----------------|-------------|-----------------|
+| RFC            | 0%          | 0%              |
+| CVE            | 9%          | **41%**         |
+| PyPI           | 25%         | **0%**          |
+| DOI/arXiv      | ~18%        | ~37%            |
+
+The existence of namespace-dependent fabrication is universal, but the ordering is model-specific. CVE and PyPI are inverted: Qwen memorized CVEs but not PyPI versions; Phi-3 evades PyPI claims and fabricates CVEs. Phi-3's 0% PyPI fabrication comes from evasion (7/10 prompts triggered format-shift or missing-anchor warnings), not honest compliance. When it cannot evade (CVE format is harder to dodge), fabrication jumps to 41%. A governance policy calibrated on one model family will be exactly wrong for another.
+
 ## Design Implications
 
 1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`) rather than accepting URLs. Format locking exposes fabrication that URL substitution conceals.
@@ -73,12 +86,12 @@ N=2 maximizes plausible fabrication with zero evasion. N=1 is too easy (model co
 
 3. **Don't aggregate with LLMs.** Hub/merge topologies amplify fabrication. If you must aggregate, use non-generative selection or code-level passthrough, not LLM rewriting. The merge operator creates new lies.
 
-4. **Citation integrity claims must specify namespace.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." Governance policies should test against the namespaces that matter for their domain.
+4. **Citation integrity claims must specify namespace and model.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The namespace ordering itself varies across model families (Qwen: CVE easy, PyPI hard; Phi-3: reversed). Governance policies must test the specific model being deployed against the namespaces that matter for their domain.
 
 5. **Treat timing/confidence signals as telemetry, not gates.** Token-level confidence saturates too fast in small models to discriminate truth from fabrication. Anchors with external oracles are the primary sensor. Temporal coherence is a secondary triage signal, never a standalone detector.
 
 ## Replication
 
-All measurements were replicated across Linux (x86_64, NVIDIA RTX 5060 Ti) and macOS (ARM64, Mac mini M4). Resolver behavior is platform-invariant for authoritative APIs. One URL-level discrepancy (Wikipedia 403 vs 404 for a fabricated page) confirmed the fragility of generic HEAD checks.
+Qwen measurements were replicated across Linux (x86_64, NVIDIA RTX 5060 Ti) and macOS (ARM64, Mac mini M4). Resolver behavior is platform-invariant for authoritative APIs. One URL-level discrepancy (Wikipedia 403 vs 404 for a fabricated page) confirmed the fragility of generic HEAD checks. Phi-3 Mini was tested on the same Linux hardware with identical corpora and decoding parameters.
 
 Code, corpora, and run artifacts: [repository link]

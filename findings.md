@@ -2,7 +2,7 @@
 
 ## Key Findings
 
-**Setup**: Qwen 2.5 3B-Instruct, temperature 0.7, N=2 citation pressure, five namespaces with authoritative validators. All measurements replicated across Linux (crow) and macOS (Mac mini ARM64) — resolver behavior is platform-invariant for authoritative APIs.
+**Setup**: Qwen 2.5 3B-Instruct + Phi-3 Mini 3.8B-Instruct, temperature 0.7, N=2 citation pressure, four namespaces with authoritative validators. All Qwen measurements replicated across Linux (crow) and macOS (Mac mini ARM64) — resolver behavior is platform-invariant for authoritative APIs.
 
 **1. Fabrication is namespace-dependent, not model-global.**
 
@@ -40,6 +40,13 @@ A model that aces RFC citations but fabricates 45% of DOIs is not "honest about 
 - N=1: 14% fab, low pressure → mostly compliant
 - N=2: 50% fab, zero evasion → maximal plausible fabrication
 - N=5: 26% fab, 60% evasion → overwhelmed, switches to avoidance
+
+**7. The namespace spectrum is model-specific.**
+- RFC: both models 0% (universal floor)
+- DOI: both models high fab (18-37%) (universally hard)
+- CVE vs PyPI: **inverted** — Qwen: CVE 9%, PyPI 25%; Phi-3: CVE 41%, PyPI 0%
+- Phi-3's 0% PyPI comes from evasion (7/10 WARN), not honest compliance
+- A governance policy calibrated on one model is wrong for another
 
 ---
 
@@ -446,3 +453,55 @@ Any eval metric that touches network I/O must distinguish definitive results (HT
 | DOI/arXiv | ~45% | Sparse, vast | Primary fabrication test |
 
 RFC/CVE/PyPI/DOI form a four-point calibration curve for the memorization-fabrication relationship. Each has a distinct failure mode and a distinct role in the test suite. Future namespaces to explore: GHSA (GitHub advisories), npm versions — both likely to sit in the PyPI-DOI range.
+
+## Cross-Model Comparison: Phi-3 Mini 3.8B vs Qwen 2.5 3B (2026-02-11)
+
+**Question**: Is the namespace fabrication spectrum a property of the model family, or a universal property of small language models?
+
+**Method**: Ran Phi-3 Mini 3.8B-Instruct (`microsoft/Phi-3-mini-4k-instruct`) on the same four locked corpora with identical decoding parameters (temperature 0.7, max_new_tokens 512, deterministic seeding). Same validators, same resolver pipeline.
+
+### Head-to-Head Comparison
+
+| Lane | Qwen 2.5 3B | Phi-3 Mini 3.8B | Delta |
+|------|-------------|-----------------|-------|
+| RFC canonical (15) | 0% fab, 117 anchors, 15C | 0% fab, 80 anchors, 15C | — |
+| DOI/arXiv canonical (15) | 17.8% fab, 44.6% lie, 3C/12F | 36.5% fab, 70.3% lie, 0C/15F | +19pp fab |
+| PyPI locked (10) | 25% fab, 10C | **0% fab**, 3C/7W | **-25pp fab** |
+| CVE locked (10) | 9.4% fab, 9C/1F | **40.8% fab**, 5C/4F/1W | **+31pp fab** |
+
+### The Spectrum is Model-Specific
+
+The namespace ordering **does not transfer across models**:
+
+| Rank | Qwen 2.5 3B | Phi-3 Mini 3.8B |
+|------|-------------|-----------------|
+| Lowest fab | RFC (0%) | RFC (0%) |
+| 2nd | CVE (9%) | PyPI (0%) |
+| 3rd | PyPI (25%) | DOI (37%) |
+| Highest fab | DOI (45%) | CVE (41%) |
+
+RFC is a universal floor (both 0%). DOI is universally bad (both high). But CVE and PyPI are **inverted**: Qwen memorized CVEs and struggles with versions; Phi-3 evades PyPI version claims and fabricates CVEs heavily.
+
+### Behavioral Profiles
+
+**Qwen 2.5 3B**: "Tries and fails." Under format lock, Qwen attempts compliance and fabricates when it doesn't know. 25% PyPI fabrication = real package names + fake versions. 9% CVE = model knows most CVEs but stumbles on recent/obscure ones.
+
+**Phi-3 Mini 3.8B**: "Dodges or crashes." Under PyPI lock, Phi-3 emits 0% fabrication but triggers 7/10 WARNs (5 format shifts, 2 missing anchors). It satisfies the request with non-checkable output rather than guessing. But under CVE lock, it can't evade (CVE format is simpler to comply with) and fabricates 41% of anchors. When it can't dodge, it lies worse than Qwen.
+
+| Behavior | Qwen PyPI | Phi-3 PyPI | Qwen CVE | Phi-3 CVE |
+|----------|-----------|------------|----------|-----------|
+| Comply (valid) | 75% | low | 91% | 57% |
+| Fabricate | 25% | 0% | 9% | 41% |
+| Evade | 0% | high (7/10) | 0% | 10% (1/10) |
+
+### Implications
+
+1. **Namespace spectrum is model-dependent.** The *existence* of namespace-dependent fabrication is universal (both models show it), but the *ordering* is model-specific. You cannot assume "CVE is easy, PyPI is hard" — that's a Qwen-specific finding.
+
+2. **Evasion is a model-level trait.** Phi-3 is a more evasive model overall. Under PyPI pressure, it dodges rather than fabricates. This is arguably *safer* (evasion is detectable, fabrication isn't) but looks like noncompliance to a user. Models differ not just in what they memorized, but in their fabrication/evasion preference.
+
+3. **DOI remains universally hard.** Both models fabricate DOIs at high rates (18-37%). DOI is the most reliable fabrication test across model families — it's sparse enough that no 3-4B model memorizes it well.
+
+4. **RFC remains a universal control.** Both models score 0% fabrication on RFC. If a model fails the RFC lane, the pipeline is broken.
+
+5. **Cross-model testing is mandatory.** A governance policy calibrated on Qwen (CVE=easy, PyPI=hard) would be exactly wrong for Phi-3. Any deployment-level policy must test the specific model being deployed, not transfer results from another model family.
