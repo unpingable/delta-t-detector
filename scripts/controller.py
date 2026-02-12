@@ -351,14 +351,6 @@ def _verdict_regressed(v1: str, v2: str) -> bool:
 # Grounding: fetch authoritative metadata and check relevance
 # ---------------------------------------------------------------------------
 
-# Namespace → fetcher function name on EpistemicGroundingTest
-_GROUND_FETCHERS = {
-    "rfcs": "fetch_rfc_title",
-    "cves": "fetch_cve_description",
-    "dois": "fetch_doi_title",
-    "arxiv": "fetch_arxiv_title",
-}
-
 # Authority tiers for fetch failure semantics.
 #   "authoritative"  — canonical registry; 404 = identifier does not exist (MITRE, IETF, doi.org)
 #   "conventional"   — de facto registry; 404 = very likely doesn't exist (PyPI JSON API)
@@ -379,13 +371,96 @@ _DEFINITIVE_NAMESPACES = {
     if tier in ("authoritative", "conventional")
 }
 
-# Namespace → API endpoint URL template (for audit trail)
-_ENDPOINT_TEMPLATES = {
-    "cves": "https://cveawg.mitre.org/api/cve/{id}",
-    "rfcs": "https://www.rfc-editor.org/rfc/rfc{id}.json",
-    "dois": "https://api.crossref.org/works/{id}",
-    "arxiv": "https://export.arxiv.org/api/query?id_list={id}",
-}
+# Groundable namespaces (have a fetch_evidence implementation)
+_GROUNDABLE_NAMESPACES = {"cves", "rfcs", "dois", "arxiv"}
+
+_FETCH_TIMEOUT = 10
+_FETCH_UA = "DeltaT-Detector/1.0"
+
+
+def _fetch_evidence(anchor_type: str, identifier: str) -> dict:
+    """Fetch metadata from authoritative source with full HTTP evidence.
+
+    Returns a dict with:
+        metadata:       extracted text (title/description), or None
+        http_status:    actual HTTP status code (int), or "timeout"/"error:ExcType"
+        content_type:   response Content-Type header
+        body_sniff:     sha256 of first 256 response bytes (detect soft 404s)
+        source_url:     exact URL fetched
+    """
+    import requests as _requests
+
+    urls_and_parsers = {
+        "cves": (
+            f"https://cveawg.mitre.org/api/cve/{identifier.upper()}",
+            lambda data: _parse_cve_json(data),
+        ),
+        "rfcs": (
+            f"https://www.rfc-editor.org/rfc/rfc{identifier}.json",
+            lambda data: data.get("title") if isinstance(data, dict) else None,
+        ),
+        "dois": (
+            f"https://api.crossref.org/works/{identifier}",
+            lambda data: (data.get("message", {}).get("title", [None]) or [None])[0]
+            if isinstance(data, dict) else None,
+        ),
+        "arxiv": (
+            f"https://export.arxiv.org/api/query?id_list={identifier}",
+            None,  # XML, handled separately
+        ),
+    }
+
+    if anchor_type not in urls_and_parsers:
+        return {"metadata": None, "http_status": "unsupported", "content_type": "",
+                "body_sniff": "", "source_url": None}
+
+    url, parser = urls_and_parsers[anchor_type]
+    try:
+        resp = _requests.get(url, headers={"User-Agent": _FETCH_UA},
+                             timeout=_FETCH_TIMEOUT)
+    except _requests.exceptions.Timeout:
+        return {"metadata": None, "http_status": "timeout", "content_type": "",
+                "body_sniff": "", "source_url": url}
+    except Exception as exc:
+        return {"metadata": None, "http_status": f"error:{type(exc).__name__}",
+                "content_type": "", "body_sniff": "", "source_url": url}
+
+    ct = resp.headers.get("Content-Type", "")
+    sniff = hashlib.sha256(resp.content[:256]).hexdigest()[:16]
+    base = {"http_status": resp.status_code, "content_type": ct,
+            "body_sniff": sniff, "source_url": url}
+
+    if resp.status_code != 200:
+        return {**base, "metadata": None}
+
+    # Parse metadata from successful response
+    metadata = None
+    if anchor_type == "arxiv":
+        # XML: extract second <title> (first is feed title)
+        matches = re.findall(r"<title[^>]*>(.+?)</title>", resp.text, re.DOTALL)
+        if len(matches) >= 2:
+            metadata = matches[1].strip()
+    else:
+        # JSON namespaces
+        try:
+            data = resp.json()
+            metadata = parser(data)
+        except Exception:
+            pass  # 200 but unparseable → metadata stays None
+
+    return {**base, "metadata": metadata}
+
+
+def _parse_cve_json(data: dict) -> Optional[str]:
+    """Extract English description from MITRE CVE JSON."""
+    cna = data.get("containers", {}).get("cna", {})
+    for desc in cna.get("descriptions", []):
+        if desc.get("lang", "en").startswith("en"):
+            return desc.get("value")
+    descriptions = cna.get("descriptions", [])
+    if descriptions:
+        return descriptions[0].get("value")
+    return None
 
 
 def ground_anchors(
@@ -423,11 +498,10 @@ def ground_anchors(
 
     # Determine which anchor types to ground
     types_to_check = []
-    if expected_anchor_type and expected_anchor_type in _GROUND_FETCHERS:
+    if expected_anchor_type and expected_anchor_type in _GROUNDABLE_NAMESPACES:
         types_to_check = [expected_anchor_type]
     else:
-        # Check all groundable types
-        types_to_check = [t for t in _GROUND_FETCHERS if citations.get(t)]
+        types_to_check = [t for t in _GROUNDABLE_NAMESPACES if citations.get(t)]
 
     if not types_to_check:
         return {"groundable": False, "n_grounded": 0, "n_confirmed": 0,
@@ -435,40 +509,43 @@ def ground_anchors(
                 "verdict": "inconclusive", "details": []}
 
     for anchor_type in types_to_check:
-        fetcher_name = _GROUND_FETCHERS[anchor_type]
-        fetcher = getattr(eg_test, fetcher_name, None)
-        if not fetcher:
-            continue
-
         is_definitive = anchor_type in _DEFINITIVE_NAMESPACES
         authority_tier = _AUTHORITY_TIERS.get(anchor_type, "non_authoritative")
-        endpoint_tpl = _ENDPOINT_TEMPLATES.get(anchor_type)
         anchors = list(dict.fromkeys(citations.get(anchor_type, [])))  # dedup
         for anchor in anchors:
-            source_url = endpoint_tpl.format(id=anchor) if endpoint_tpl else None
             fetch_ts = datetime.now(timezone.utc).isoformat()
+            ev = _fetch_evidence(anchor_type, anchor)
+            metadata = ev["metadata"]
+            http_status = ev["http_status"]
 
-            # Fetch authoritative metadata
-            metadata = fetcher(anchor)
-
+            # Classify the fetch result
             if metadata is None:
-                if is_definitive:
-                    # Authoritative/conventional API returned nothing → doesn't exist
+                # Distinguish definitive absence from transient failure.
+                # For definitive namespaces: non-200 (including real 404, or 200
+                # with unparseable body) = identifier doesn't exist.
+                # For non-authoritative: any failure is genuinely inconclusive.
+                # Also catch: 301/302 redirects, 429 rate-limit, 403/451 blocks.
+                if isinstance(http_status, int) and http_status in (301, 302, 429, 403, 451):
+                    # Ambiguous regardless of tier — redirect, rate-limit, or blocked
+                    n_failed += 1
+                    status = "fetch_failed"
+                elif is_definitive:
                     n_not_found += 1
                     status = "not_found"
-                    response_class = "404"
                 else:
                     n_failed += 1
                     status = "fetch_failed"
-                    response_class = "unknown"
+
                 details.append({
                     "anchor": f"{anchor_type}:{anchor}",
                     "namespace": anchor_type,
                     "identifier": anchor,
                     "status": status,
                     "authority_tier": authority_tier,
-                    "source_url": source_url,
-                    "response_class": response_class,
+                    "source_url": ev["source_url"],
+                    "http_status": http_status,
+                    "content_type": ev["content_type"],
+                    "body_sniff": ev["body_sniff"],
                     "timestamp": fetch_ts,
                     "metadata": None,
                     "relevance": None,
@@ -496,8 +573,10 @@ def ground_anchors(
                 "identifier": anchor,
                 "status": grounding,
                 "authority_tier": authority_tier,
-                "source_url": source_url,
-                "response_class": "200",
+                "source_url": ev["source_url"],
+                "http_status": http_status,
+                "content_type": ev["content_type"],
+                "body_sniff": ev["body_sniff"],
                 "timestamp": fetch_ts,
                 "metadata": metadata[:200] if metadata else None,
                 "relevance": round(relevance, 3),
