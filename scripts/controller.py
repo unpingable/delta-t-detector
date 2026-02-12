@@ -741,6 +741,8 @@ def ground_anchors(
         verdict = "mixed_lean_refuted"
 
     # Section integrity check (RFC only — first namespace with section-level data)
+    # If section integrity finds failures, demote the verdict.
+    # "right book, wrong page" is not "confirmed".
     section_integrity = None
     if any(t == "rfcs" for t in types_to_check):
         section_integrity = check_rfc_section_integrity(
@@ -748,6 +750,15 @@ def ground_anchors(
             relevance_fn=eg_test.check_citation_relevance,
             relevance_threshold=relevance_threshold,
         )
+        if section_integrity is not None:
+            n_bad = (section_integrity["n_wrong_section"]
+                     + section_integrity["n_no_such_section"])
+            if n_bad > 0 and verdict == "confirmed":
+                # Existence confirmed but address fabricated → refuted
+                verdict = "refuted"
+            elif n_bad > 0 and verdict.startswith("mixed"):
+                # Mixed existence + bad sections → lean refuted
+                verdict = "mixed_lean_refuted"
 
     result = {
         "groundable": n_evidence > 0 or n_failed > 0,

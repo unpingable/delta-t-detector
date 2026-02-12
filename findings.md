@@ -1049,4 +1049,13 @@ The model knows OAuth section structure (RFC 6749 §4 is indeed about authorizat
 
 **Key insight**: Section integrity catches a failure mode invisible to existence-only checking. Both RFC 6455 and RFC 7589 are real documents. The existence oracle correctly says CLEAN. But the model fabricated the section-level claims — citing real RFCs with wrong or nonexistent sections. This is the citation-integrity analog of "correct name, wrong address."
 
+**Verdict demotion**: Section integrity failures demote the grounding verdict. If existence says "confirmed" but section integrity finds wrong_section or no_such_section, the grounding verdict is demoted to "refuted" — preventing the GROUNDED fast-path. For rfc-int-05, the pre-section-integrity verdict was `mixed_lean_confirmed` (one RFC relevant, one not); after section integrity found wrong_section + no_such_section, the verdict was demoted to `mixed_lean_refuted`. This routes the prompt to retry instead of accepting the flawed citations.
+
+**Oracle hierarchy** (three levels, each stricter):
+1. **Existence**: does the document exist? (rfc-editor.org JSON API, 200/404)
+2. **Relevance**: is the document title relevant to the prompt? (word overlap ≥ 0.15)
+3. **Address integrity**: does the cited section exist, and does its content match the claim? (plain text parse + relevance)
+
+Each level catches fabrication invisible to the level above. Level 1 catches fabricated identifiers. Level 2 catches "real but irrelevant" citations. Level 3 catches "right document, wrong address."
+
 Section integrity only runs inside grounding (when fork_risk < τ), so it's selective — only prompts the margin signal flags as uncertain get the expensive per-section fetch. For the 3 FAST_PATH prompts (fork_risk > 0.05), section integrity was not checked — the model was confident and the oracle passed, so we trust it. This is the right cost/coverage tradeoff for a runtime controller.
