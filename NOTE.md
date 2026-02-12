@@ -15,10 +15,11 @@
 11. Seed sensitivity is a model fingerprint: Qwen is stable, Phi-3 is chaotic even at greedy
 12. Top-2 logit margin at identifier tokens predicts drift_class: Phi-3 CVE has median margin 0.0 (half tokens at tie)
 13. Margin-based controller with authoritative grounding yields six terminal policies; authoritative 404 is evidence, not absence of evidence
+14. Section integrity catches fabrication invisible to existence oracles: real RFCs cited with wrong or nonexistent section numbers
 
 ---
 
-**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Findings 11-13 quantify seed sensitivity and its mechanistic cause (top-2 margin); Finding 14 builds a runtime controller with authoritative grounding.
+**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Findings 11-13 quantify seed sensitivity and its mechanistic cause (top-2 margin); Finding 14 builds a runtime controller with authoritative grounding; Finding 15 extends grounding from existence to section-level integrity.
 
 ## Findings
 
@@ -191,6 +192,17 @@ Turning the margin metric into a live per-prompt policy (fork_risk = m_min at id
 Key design insight: for authoritative APIs (MITRE CVE, PyPI JSON, rfc-editor.org), a 404 is `not_found` — evidence of non-existence, not inconclusive. Treating it as neutral created a false positive (grounding "confirmed" a prompt with one real + one fabricated CVE). Counting `not_found` as negative evidence fixed the classification and unlocked a retry gain (FAIL→CLEAN on Phi-3).
 
 CONFIDENT_WRONG fires on Phi-3 CVE (m_min=0.18, oracle FAIL) but not Qwen-3B CVE (all fabrication at m_min=0.0). Grounding saves retry tokens when anchors can be resolved. Zero regressions at τ=0.05 across all runs.
+
+### 15. Section integrity catches fabrication invisible to existence oracles
+
+Extending grounding from "does this RFC exist?" to "did the model cite the right section?" RFC plain text is fetched from rfc-editor.org, section headings are parsed at column 0, and each "RFC NNNNN Section X.Y" reference is verified against the actual section map.
+
+On a 5-prompt section-specific RFC corpus (Qwen 3B, t=0.7):
+- **RFC 6749 §4** (OAuth): verified — actual title "Obtaining Authorization" matches prompt about authorization grants (relevance 0.50)
+- **RFC 6455 §5.1** (WebSocket): wrong_section — actual title "Overview," not the opening handshake (which is §4). Relevance 0.0.
+- **RFC 7589 §5.1.1** (WebSocket): no_such_section — this 13-section NETCONF document doesn't have §5.1.1
+
+The existence oracle says CLEAN for all three (the RFCs are real). Section integrity reveals the model fabricated section-level claims while citing correct documents — the citation analog of "correct name, wrong address." This failure mode is invisible to existence-only checking and represents the next layer of the grounding hierarchy.
 
 ## Design Rules
 

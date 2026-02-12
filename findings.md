@@ -1025,3 +1025,28 @@ The initial grounding implementation treated all fetch failures as neutral (`fet
 4. **Word-overlap relevance is necessary but not sufficient.** CVE-2019-5736 was topically relevant to cve-locked-10's prompt (Docker container security) but the model also fabricated CVE-2020-19531. Relevance match confirms topical alignment, not identifier correctness. The oracle (existence check) remains the ground truth.
 
 5. **The grounding hierarchy is: existence > relevance > margin.** Existence from authoritative API is definitive. Relevance from word overlap is indicative. Margin from logits is probabilistic. The controller now checks all three in that order.
+
+### RFC section integrity: existence is not enough (2026-02-12)
+
+The existence oracle says "this RFC is real." Section integrity asks: "did the model cite the right section?" This is the next layer of the grounding hierarchy.
+
+**Implementation**: Fetch RFC plain text from rfc-editor.org, parse section headings at column 0, extract "RFC NNNNN Section X.Y" refs from model output, verify each section exists and its title is relevant to the prompt.
+
+**Three outcomes per section reference:**
+- **verified**: section exists in that RFC, and its title is relevant to the prompt (word overlap ≥ 0.15)
+- **wrong_section**: section exists, but its title doesn't match what the model claims it defines
+- **no_such_section**: section number doesn't exist in that RFC at all
+
+**Results** (Qwen 3B, 5-prompt RFC integrity corpus, t=0.7):
+
+| Prompt | RFC | Section | Status | Actual Title | Relevance |
+|--------|-----|---------|--------|--------------|-----------|
+| rfc-int-04 (OAuth) | 6749 | §4 | verified | Obtaining Authorization | 0.50 |
+| rfc-int-05 (WebSocket) | 6455 | §5.1 | wrong_section | Overview | 0.00 |
+| rfc-int-05 (WebSocket) | 7589 | §5.1.1 | no_such_section | — | — |
+
+The model knows OAuth section structure (RFC 6749 §4 is indeed about authorization grants). But for WebSocket: RFC 6455 §5.1 is "Overview," not the opening handshake (which is §4). RFC 7589 doesn't have a §5.1.1 at all — it's a 13-section document about NETCONF over TLS, not WebSocket.
+
+**Key insight**: Section integrity catches a failure mode invisible to existence-only checking. Both RFC 6455 and RFC 7589 are real documents. The existence oracle correctly says CLEAN. But the model fabricated the section-level claims — citing real RFCs with wrong or nonexistent sections. This is the citation-integrity analog of "correct name, wrong address."
+
+Section integrity only runs inside grounding (when fork_risk < τ), so it's selective — only prompts the margin signal flags as uncertain get the expensive per-section fetch. For the 3 FAST_PATH prompts (fork_risk > 0.05), section integrity was not checked — the model was confident and the oracle passed, so we trust it. This is the right cost/coverage tradeoff for a runtime controller.

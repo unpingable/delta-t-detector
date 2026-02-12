@@ -348,6 +348,148 @@ def _verdict_regressed(v1: str, v2: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# RFC section integrity: parse section headings, check section-level claims
+# ---------------------------------------------------------------------------
+
+_RFC_SECTION_PAT = re.compile(r'^(\d+(?:\.\d+)*)\.  (.+)', re.MULTILINE)
+_RFC_SECTION_REF_PAT = re.compile(
+    r'RFC\s*(\d{3,5})\s*(?:,?\s*)?(?:Section|§)\s*([\d.]+)',
+    re.IGNORECASE,
+)
+
+# Per-session cache: rfc_number → {section_num: title}
+_rfc_section_cache: Dict[str, Dict[str, str]] = {}
+
+
+def _parse_rfc_sections(text: str) -> Dict[str, str]:
+    """Parse RFC plain text into {section_number: title} map.
+
+    Only matches headings at column 0 (not indented list items).
+    """
+    return {m.group(1): m.group(2) for m in _RFC_SECTION_PAT.finditer(text)}
+
+
+def _fetch_rfc_sections(rfc_number: str) -> Optional[Dict[str, str]]:
+    """Fetch RFC text and return parsed section map. Cached per session."""
+    if rfc_number in _rfc_section_cache:
+        return _rfc_section_cache[rfc_number]
+
+    import requests as _requests
+    try:
+        resp = _requests.get(
+            f"https://www.rfc-editor.org/rfc/rfc{rfc_number}.txt",
+            headers={"User-Agent": _FETCH_UA},
+            timeout=_FETCH_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            _rfc_section_cache[rfc_number] = None
+            return None
+        sections = _parse_rfc_sections(resp.text)
+        _rfc_section_cache[rfc_number] = sections
+        return sections
+    except Exception:
+        return None
+
+
+def _extract_section_refs(text: str) -> List[Tuple[str, str]]:
+    """Extract unique (rfc_number, section_number) pairs from model output.
+
+    Matches patterns like:
+        RFC 7540 Section 3.2
+        RFC 7540, Section 3.2
+        RFC7540 §3.2
+
+    Deduplicates: model may repeat the same ref in REFS/CLAIMS blocks.
+    """
+    seen: set = set()
+    result: list = []
+    for m in _RFC_SECTION_REF_PAT.finditer(text):
+        pair = (m.group(1), m.group(2).rstrip('.'))
+        if pair not in seen:
+            seen.add(pair)
+            result.append(pair)
+    return result
+
+
+def check_rfc_section_integrity(
+    text: str,
+    prompt_text: str,
+    relevance_fn,
+    relevance_threshold: float = 0.15,
+) -> Optional[dict]:
+    """Check if RFC section references in model output match actual section content.
+
+    Returns None if no section references found, otherwise:
+        {
+            "n_refs": int,
+            "n_verified": int,       # section exists and title is relevant
+            "n_wrong_section": int,   # section exists but title doesn't match claim
+            "n_no_such_section": int, # section number doesn't exist in that RFC
+            "n_fetch_failed": int,
+            "refs": [...]
+        }
+    """
+    section_refs = _extract_section_refs(text)
+    if not section_refs:
+        return None
+
+    refs = []
+    n_verified = 0
+    n_wrong_section = 0
+    n_no_such_section = 0
+    n_fetch_failed = 0
+
+    for rfc_num, sec_num in section_refs:
+        sections = _fetch_rfc_sections(rfc_num)
+        if sections is None:
+            n_fetch_failed += 1
+            refs.append({
+                "rfc": rfc_num, "section": sec_num,
+                "status": "fetch_failed", "actual_title": None,
+                "relevance": None,
+            })
+            continue
+
+        actual_title = sections.get(sec_num)
+        if actual_title is None:
+            n_no_such_section += 1
+            refs.append({
+                "rfc": rfc_num, "section": sec_num,
+                "status": "no_such_section", "actual_title": None,
+                "relevance": None,
+                "available_sections": len(sections),
+            })
+            continue
+
+        # Check if the model's surrounding text is relevant to the actual section title
+        rel_response = relevance_fn(text, actual_title)
+        rel_prompt = relevance_fn(prompt_text, actual_title)
+        relevance = max(rel_response, rel_prompt)
+
+        if relevance >= relevance_threshold:
+            n_verified += 1
+            status = "verified"
+        else:
+            n_wrong_section += 1
+            status = "wrong_section"
+
+        refs.append({
+            "rfc": rfc_num, "section": sec_num,
+            "status": status, "actual_title": actual_title,
+            "relevance": round(relevance, 3),
+        })
+
+    return {
+        "n_refs": len(section_refs),
+        "n_verified": n_verified,
+        "n_wrong_section": n_wrong_section,
+        "n_no_such_section": n_no_such_section,
+        "n_fetch_failed": n_fetch_failed,
+        "refs": refs,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Grounding: fetch authoritative metadata and check relevance
 # ---------------------------------------------------------------------------
 
@@ -598,7 +740,16 @@ def ground_anchors(
     else:
         verdict = "mixed_lean_refuted"
 
-    return {
+    # Section integrity check (RFC only — first namespace with section-level data)
+    section_integrity = None
+    if any(t == "rfcs" for t in types_to_check):
+        section_integrity = check_rfc_section_integrity(
+            text, prompt_text,
+            relevance_fn=eg_test.check_citation_relevance,
+            relevance_threshold=relevance_threshold,
+        )
+
+    result = {
         "groundable": n_evidence > 0 or n_failed > 0,
         "n_grounded": n_grounded,
         "n_confirmed": n_confirmed,
@@ -608,6 +759,9 @@ def ground_anchors(
         "verdict": verdict,
         "details": details,
     }
+    if section_integrity is not None:
+        result["section_integrity"] = section_integrity
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +916,8 @@ def run_prompt(
             "n_not_found": grounding.get("n_not_found", 0),
             "details": grounding["details"],
         }
+        if "section_integrity" in grounding:
+            record["grounding"]["section_integrity"] = grounding["section_integrity"]
 
     if result2 is not None:
         record["attempt2"] = {
