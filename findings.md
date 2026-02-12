@@ -824,3 +824,30 @@ M_median is the median of per-prompt M_min values. M_mean is the mean margin acr
 4. **Scale improves margins.** Qwen-7B has higher M_median than Qwen-3B on both namespaces. Scale sharpens the logit distribution at identifier tokens, making decoding more deterministic. This explains why Qwen-7B is STABLE: its mode is not just correct more often — it's also more confidently correct.
 
 5. **The causal chain.** Low M_median → flat logits at identifier tokens → temperature amplifies fork probability → seed sensitivity → CHAOTIC classification. The margin is the *cause*; drift_class is the *symptom*.
+
+### Design notes: margin as a control signal
+
+**What M_median is.** A phase-change sensor for "model about to fork." Not a truth detector — a control input. It detects fork risk in the exact spans where you need symbolic precision.
+
+**Where it generalizes.** Symbolic precision spans: IDs, versions, hashes, URLs, commit SHAs, tool arguments, JIRA keys — anywhere one wrong token breaks the anchor. These spans have low semantic redundancy, so the model's distribution is peaky when it knows and flat when it doesn't. Flatness is exactly what M_min catches.
+
+**Where it doesn't generalize.** Natural language truth, long-form reasoning, instruction following under adversarial text. A single local margin minimum may not explain behavior if the fork happened earlier (goal interpretation) or later (tool semantics). "Confidently wrong" outputs have high margin on the wrong manifold — evasion, memorized junk, plausible-but-false.
+
+**3-way controller design (future):**
+
+| Condition | Policy |
+|---|---|
+| Low margin (`M < τ`) | Retry path: force greedy / two-stage / extra validation |
+| High margin + oracle fail | Hard stop: don't retry, escalate / switch model / ask user |
+| High margin + oracle pass | Fast path: proceed, cheap verification |
+
+**Calibration.** τ should be per-(namespace, model family), not global. CVE needs higher sensitivity (more slow-path) than PyPI. The overnight drift data provides the calibration surface.
+
+**BPE robustness.** M_min bottoms out at 0 for all models due to tokenization artifacts (BPE splits create at least one near-tie). M_median is robust against this. For a control threshold, use median or p25 of per-prompt M_min values, not the absolute minimum.
+
+**Open experiments:**
+- Vary window size K (8, 12, 16, 24) to test if M_median is stable across detection heuristics
+- Cross-validate τ on a held-out namespace (arXiv or Git commit SHAs)
+- Temperature sweep (t=0.3, 0.5, 0.7, 1.0) to map stability curves per namespace
+- Namespace Sensitivity Index: `NSI = variance_across_models + variance_across_decoding` — high NSI = underrepresented/fragile
+- Retry elasticity: `retry_gain = fab_initial - fab_post_retry` — high gain = entropy failure, low gain = structural absence
