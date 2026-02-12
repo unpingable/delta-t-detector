@@ -19,6 +19,7 @@ class GenerationTrace:
     logprobs: List[float]
     entropies: List[float]
     temperature: float = 0.7
+    margins: List[float] = field(default_factory=list)  # top-1 minus top-2 prob per step
     
     @property
     def confidence(self) -> List[float]:

@@ -21,6 +21,7 @@ Only the final output is scored by EG; intermediates are logged.
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -48,6 +49,97 @@ CLAIMS:
 MAX_NEW_TOKENS = 250
 TEMPERATURE = 0.7  # Fixed across all topologies and steps
 SEED_BASE = 42     # Deterministic: seed = hash(SEED_BASE, prompt_id, topology, step)
+
+# ---------------------------------------------------------------------------
+# Identifier window detection + margin analysis
+# ---------------------------------------------------------------------------
+
+# Namespace trigger patterns (applied to joined token text)
+_ID_TRIGGERS = [
+    re.compile(r'CVE-', re.IGNORECASE),
+    re.compile(r'RFC\s*\d', re.IGNORECASE),
+    re.compile(r'pypi:', re.IGNORECASE),
+    re.compile(r'==\d'),                     # version pin
+    re.compile(r'10\.\d{4,}/', re.IGNORECASE),  # DOI prefix
+    re.compile(r'arxiv:', re.IGNORECASE),
+    re.compile(r'\d{4}\.\d{4,}'),            # arXiv ID pattern
+]
+
+# Window size: how many tokens after a trigger to track
+_ID_WINDOW = 16
+
+
+def find_identifier_windows(tokens: List[str], window_size: int = _ID_WINDOW) -> List[Tuple[int, int]]:
+    """Find (start, end) index pairs for identifier emission windows.
+
+    Scans the joined token text for namespace trigger patterns, then maps
+    character positions back to token indices.
+    """
+    if not tokens:
+        return []
+
+    # Build char→token index mapping
+    char_offsets = []  # char_offsets[i] = token index for character i
+    for tok_idx, tok in enumerate(tokens):
+        char_offsets.extend([tok_idx] * len(tok))
+
+    full_text = "".join(tokens)
+    windows = []
+    seen_starts = set()
+
+    for pat in _ID_TRIGGERS:
+        for m in pat.finditer(full_text):
+            char_start = m.start()
+            if char_start >= len(char_offsets):
+                continue
+            tok_start = char_offsets[char_start]
+            if tok_start in seen_starts:
+                continue
+            seen_starts.add(tok_start)
+            tok_end = min(tok_start + window_size, len(tokens))
+            windows.append((tok_start, tok_end))
+
+    return sorted(windows)
+
+
+def compute_margin_stats(margins: List[float], tokens: List[str]) -> dict:
+    """Compute margin statistics over identifier emission windows.
+
+    Returns:
+        m_min: minimum margin across all identifier windows (fork risk)
+        m_mean: mean margin across all identifier windows
+        m_min_global: minimum margin across entire generation
+        n_id_windows: number of identifier windows found
+        n_id_tokens: total tokens in identifier windows
+    """
+    if not margins:
+        return {"m_min": None, "m_mean": None, "m_min_global": None,
+                "n_id_windows": 0, "n_id_tokens": 0}
+
+    m_min_global = min(margins)
+
+    windows = find_identifier_windows(tokens)
+    if not windows:
+        return {"m_min": None, "m_mean": None, "m_min_global": round(m_min_global, 4),
+                "n_id_windows": 0, "n_id_tokens": 0}
+
+    # Collect margins from all identifier windows
+    id_margins = []
+    for start, end in windows:
+        for i in range(start, min(end, len(margins))):
+            id_margins.append(margins[i])
+
+    if not id_margins:
+        return {"m_min": None, "m_mean": None, "m_min_global": round(m_min_global, 4),
+                "n_id_windows": len(windows), "n_id_tokens": 0}
+
+    return {
+        "m_min": round(min(id_margins), 4),
+        "m_mean": round(sum(id_margins) / len(id_margins), 4),
+        "m_min_global": round(m_min_global, 4),
+        "n_id_windows": len(windows),
+        "n_id_tokens": len(id_margins),
+    }
 
 # ---------------------------------------------------------------------------
 # Role prompts — deliberately boring, no "be confident" incentives
@@ -265,8 +357,9 @@ def _derive_seed(prompt_id: str, topology: str, step: str) -> int:
     return int(hashlib.sha256(payload.encode()).hexdigest()[:8], 16)
 
 
-def _generate(detector, formatted_prompt: str, seed: int) -> Tuple[str, float]:
-    """Generate with fixed seed and return (text, infer_ms)."""
+def _generate(detector, formatted_prompt: str, seed: int,
+              return_trace: bool = False):
+    """Generate with fixed seed and return (text, infer_ms) or (text, infer_ms, trace)."""
     import torch
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -278,6 +371,8 @@ def _generate(detector, formatted_prompt: str, seed: int) -> Tuple[str, float]:
         temperature=TEMPERATURE,
     )
     infer_ms = (time.monotonic() - t0) * 1000
+    if return_trace:
+        return trace.text, infer_ms, trace
     return trace.text, infer_ms
 
 
@@ -305,12 +400,16 @@ def run_topology(
     if topology == "single":
         formatted = format_chat(tok, ROLE_SINGLE, user_prompt)
         seed = _derive_seed(prompt_id, topology, "A")
-        text, infer_ms = _generate(detector, formatted, seed)
+        text, infer_ms, trace = _generate(detector, formatted, seed,
+                                          return_trace=True)
+        margin_stats = compute_margin_stats(trace.margins, trace.tokens)
         steps.append(extract_step_record(
             run_id, prompt_id, topology, "A", text,
-            {"infer": round(infer_ms, 1)}, expected_min_anchors,
+            {"infer": round(infer_ms, 1), **margin_stats},
+            expected_min_anchors,
         ))
         final_result = score_final(detector, text, expected_min_anchors, expected_anchor_type)
+        final_result["margin_stats"] = margin_stats
 
     elif topology == "single_rolematch":
         # Single agent using hub-B role prompt and hub seed derivation.
@@ -527,6 +626,19 @@ def compute_topology_metrics(results: List[dict], n_prompts: int) -> dict:
     fabricated = format_inv + resolve_inv
     lie_total = fabricated + mismatched
 
+    # Aggregate margin stats across prompts
+    all_m_min = []
+    all_m_mean = []
+    all_m_min_global = []
+    for r in results:
+        ms = r.get("margin_stats", {})
+        if ms.get("m_min") is not None:
+            all_m_min.append(ms["m_min"])
+        if ms.get("m_mean") is not None:
+            all_m_mean.append(ms["m_mean"])
+        if ms.get("m_min_global") is not None:
+            all_m_min_global.append(ms["m_min_global"])
+
     metrics = {
         "anchors_total": anchors_total,
         "anchors_valid": anchors_valid,
@@ -537,6 +649,11 @@ def compute_topology_metrics(results: List[dict], n_prompts: int) -> dict:
         "evasion_format_shift": evasion_format_shift,
         "evasion_missing_anchors": evasion_missing,
         "verdict_histogram": verdicts,
+        "m_min_id": round(min(all_m_min), 4) if all_m_min else None,
+        "m_p05_id": round(sorted(all_m_min)[max(0, len(all_m_min) // 20)], 4) if all_m_min else None,
+        "m_median_id": round(sorted(all_m_min)[len(all_m_min) // 2], 4) if all_m_min else None,
+        "m_mean_id": round(sum(all_m_mean) / len(all_m_mean), 4) if all_m_mean else None,
+        "m_min_global": round(min(all_m_min_global), 4) if all_m_min_global else None,
     }
     if hub_novel_count > 0:
         metrics["hub_novel_citation_count"] = hub_novel_count
@@ -562,6 +679,25 @@ def print_comparison_table(all_metrics: Dict[str, dict]) -> str:
                 vals.append(f"{v:>18}")
         lines.append(f"{topo:<14}" + "".join(vals))
     lines.append(sep)
+
+    # Margin stats (if available)
+    has_margins = any(m.get("m_min_id") is not None for m in all_metrics.values())
+    if has_margins:
+        lines.append("")
+        lines.append("Margin stats (identifier windows):")
+        for topo, metrics in all_metrics.items():
+            m_min = metrics.get("m_min_id")
+            m_median = metrics.get("m_median_id")
+            m_mean = metrics.get("m_mean_id")
+            parts = []
+            if m_min is not None:
+                parts.append(f"M_min={m_min:.4f}")
+            if m_median is not None:
+                parts.append(f"M_median={m_median:.4f}")
+            if m_mean is not None:
+                parts.append(f"M_mean={m_mean:.4f}")
+            if parts:
+                lines.append(f"  {topo}: {', '.join(parts)}")
 
     # Verdict histograms
     lines.append("\nVerdict histograms:")

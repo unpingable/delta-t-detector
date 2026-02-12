@@ -419,36 +419,42 @@ class DeltaTDetector:
         logprobs = []
         entropies = []
         tokens = []
-        
+        margins = []
+
         curr_input_ids = inputs['input_ids']
-        
+
         with torch.no_grad():
             for _ in range(max_new_tokens):
                 try:
                     outputs = self.model(curr_input_ids)
                     next_token_logits = outputs.logits[:, -1, :]
-                    
+
                     probs = torch.softmax(next_token_logits / temperature, dim=-1)
                     entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)
-                    
+
+                    # Top-2 margin: p1 - p2 (fork risk signal)
+                    top2 = torch.topk(probs, k=2, dim=-1)
+                    margin = float(top2.values[0, 0] - top2.values[0, 1])
+
                     next_token_index = torch.multinomial(probs, num_samples=1)
                     token_id = next_token_index.item()
-                    
+
                     token_logprob = torch.log(probs[0, token_id] + 1e-10)
-                    
+
                     logprobs.append(float(token_logprob))
                     entropies.append(float(entropy))
                     tokens.append(self.tokenizer.decode([token_id]))
-                    
+                    margins.append(margin)
+
                     if token_id == self.tokenizer.eos_token_id:
                         break
-                        
+
                     curr_input_ids = torch.cat([curr_input_ids, next_token_index], dim=-1)
                 except Exception as e:
                     print(f"Generation error: {e}")
                     break
-        
-        return GenerationTrace(tokens, logprobs, entropies, temperature)
+
+        return GenerationTrace(tokens, logprobs, entropies, temperature, margins)
     
     # =========================================================================
     # Feature Computation

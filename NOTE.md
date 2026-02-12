@@ -13,10 +13,11 @@
 9. Scale (3B→7B) halves fabrication and closes knowledge boundaries; 4-bit quantization preserves the effect
 10. Two-stage decoding (primary warm, retry greedy) eliminates retry harm on memorized namespaces; scale makes it redundant
 11. Seed sensitivity is a model fingerprint: Qwen is stable, Phi-3 is chaotic even at greedy
+12. Top-2 logit margin at identifier tokens predicts drift_class: Phi-3 CVE has median margin 0.0 (half tokens at tie)
 
 ---
 
-**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Finding 11 validates the two-stage controller; Finding 12 quantifies seed sensitivity.
+**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Findings 11-13 quantify seed sensitivity and its mechanistic cause (top-2 margin).
 
 ## Findings
 
@@ -159,6 +160,20 @@ Two-stage eliminates all retry harm when the model knows the answer (memorized n
 
 Seed sensitivity is inversely correlated with model quality. Qwen-7B is rock-stable everywhere. Qwen-3B drifts only at sampling temperature on its weakest namespace. Phi-3 is chaotic at t=0.7 and still seed-sensitive at pseudo-greedy — the model's logit surface is flatter, so even minimal temperature creates large behavioral variation. The two-stage controller is perfectly safe across all 3 seeds for Phi-3 on PyPI (12/12 retries → clean, 0 harm).
 
+### 13. Top-2 logit margin predicts drift class
+
+Computing the margin between top-1 and top-2 token probability (M = p1 - p2) at each generation step within identifier emission windows:
+
+| Model | PyPI M_median | CVE M_median | Drift Class |
+|---|---|---|---|
+| Qwen-7B-4bit | 0.35 | 0.15 | STABLE |
+| Qwen-3B | 0.24 | 0.05 | SEED_SENSITIVE |
+| Phi-3-Mini | 0.22 | **0.00** | CHAOTIC |
+
+M_median is the median per-prompt minimum margin across identifier windows. Phi-3 on CVE has median margin 0.0 — half of all prompts contain at least one identifier token where the model is at a complete tie between two next-token candidates. This is the mechanistic cause of the CHAOTIC classification: flat logit peaks at identifier tokens mean temperature trivially flips the output.
+
+The causal chain: low margin → flat logits → temperature amplifies fork probability → seed sensitivity → fabrication variance. The margin is the cause; drift_class is the symptom. This can be computed online during generation to trigger controller mode switches.
+
 ## Design Rules
 
 1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`), not URLs. Use authoritative existence oracles per namespace (MITRE CVE API, PyPI JSON, doi.org). HEAD/200 is not validation — `cve.mitre.org` returns 200 for nonexistent CVEs; Wikipedia returns 403 or 404 depending on platform. Only 200 and 404 from type-specific APIs are definitive.
@@ -170,6 +185,8 @@ Seed sensitivity is inversely correlated with model quality. Qwen-7B is rock-sta
 4. **The namespace spectrum is model-indexed.** A model that aces RFC citations but fabricates 45% of DOIs is not "honest about citations." The ordering itself varies across model families (Qwen: CVE easy, PyPI hard; Phi-3: reversed). Governance policies must test the specific model against the specific namespaces that matter for their domain. Don't transfer results across model families.
 
 5. **Don't aggregate citations with LLMs.** Hub/merge topologies amplify fabrication (+19pp). The merge operator creates new lies. Single-agent is strictly better for citation integrity at 3-4B scale. If you must aggregate, use code-level passthrough, not LLM rewriting.
+
+6. **Measure spread, not just rate.** A single fabrication rate hides two failure modes: "stable-but-wrong" (high mean, low spread — knowledge boundary) vs "variable-but-sometimes-right" (low mean, high spread — sampling noise). Multi-seed drift checks separate them. Retry only helps the high-spread case.
 
 ## Replication
 

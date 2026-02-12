@@ -794,3 +794,33 @@ Two-stage converts the same-temp harm (WARN→FAIL) to persistent evasion (WARN�
 6. **HEAD-based resolution is the weak link.** 12% error/timeout/ambiguous rate vs <1% for authoritative APIs. Generic URL validation remains fragile.
 
 7. **doi.org has 63% not-found rate** — consistent with DOI being the hardest namespace (highest fabrication). The resolver is working correctly; the model is fabricating DOIs.
+
+---
+
+## Top-2 Margin Analysis (M_min)
+
+### Setup
+
+For each generated token, compute the margin between top-1 and top-2 probability: `M_t = p1 - p2`. Detect identifier emission windows (CVE-, RFC, pypi:, ==, DOI prefix, arXiv ID patterns) and compute M_min across each 16-token window. M_min across all windows per prompt = the "fork risk" scalar.
+
+### Results
+
+| Model | PyPI M_median | CVE M_median | PyPI M_mean | CVE M_mean | Drift Class |
+|---|---|---|---|---|---|
+| Qwen-7B-4bit | 0.3496 | 0.1465 | 0.9261 | 0.9371 | STABLE |
+| Qwen-3B | 0.2441 | 0.0537 | 0.9077 | 0.8871 | SEED_SENSITIVE |
+| Phi-3-Mini | 0.2188 | **0.0000** | 0.9261 | 0.8732 | CHAOTIC |
+
+M_median is the median of per-prompt M_min values. M_mean is the mean margin across all identifier window tokens.
+
+### Key observations
+
+1. **M_median predicts drift_class.** Higher median margin → more stable model. Phi-3 CVE has median margin 0.0 — half of all prompts have at least one identifier token at a complete top-2 tie. Qwen-7B has the highest margins everywhere → STABLE.
+
+2. **M_mean is not discriminative.** All models have M_mean > 0.87. Most identifier tokens have strong margins; the instability is caused by a few low-margin tokens per prompt. The floor (M_min/M_median), not the ceiling (M_mean), predicts behavior.
+
+3. **CVE is structurally harder than PyPI.** All three models show lower M_median on CVE than PyPI. CVE IDs require more precise memorization (year + sequence number) vs PyPI (package name + version). The logit surface confirms this: CVE identifiers have flatter probability distributions.
+
+4. **Scale improves margins.** Qwen-7B has higher M_median than Qwen-3B on both namespaces. Scale sharpens the logit distribution at identifier tokens, making decoding more deterministic. This explains why Qwen-7B is STABLE: its mode is not just correct more often — it's also more confidently correct.
+
+5. **The causal chain.** Low M_median → flat logits at identifier tokens → temperature amplifies fork probability → seed sensitivity → CHAOTIC classification. The margin is the *cause*; drift_class is the *symptom*.
