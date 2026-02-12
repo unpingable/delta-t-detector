@@ -359,10 +359,33 @@ _GROUND_FETCHERS = {
     "arxiv": "fetch_arxiv_title",
 }
 
-# Namespaces with authoritative APIs where a fetch failure (None return)
-# means the identifier doesn't exist (404), not a network error.
-# For these, fetch_failed → not_found (counted as refuted).
-_AUTHORITATIVE_NAMESPACES = {"cves", "dois", "rfcs"}
+# Authority tiers for fetch failure semantics.
+#   "authoritative"  — canonical registry; 404 = identifier does not exist (MITRE, IETF, doi.org)
+#   "conventional"   — de facto registry; 404 = very likely doesn't exist (PyPI JSON API)
+#   "non_authoritative" — may fail for reasons unrelated to existence (arXiv, web URLs)
+# 404 from authoritative/conventional → not_found (negative evidence).
+# 404 from non_authoritative → fetch_failed (genuinely inconclusive).
+_AUTHORITY_TIERS = {
+    "cves": "authoritative",     # MITRE is the CVE Numbering Authority
+    "rfcs": "authoritative",     # rfc-editor.org is the official IETF registry
+    "dois": "authoritative",     # doi.org is the official DOI resolver
+    "pypi": "conventional",      # PyPI JSON API is the de facto package registry
+    "arxiv": "non_authoritative",  # arXiv API can fail transiently
+}
+
+# Namespaces where 404 is definitive (not_found, counted as negative evidence)
+_DEFINITIVE_NAMESPACES = {
+    ns for ns, tier in _AUTHORITY_TIERS.items()
+    if tier in ("authoritative", "conventional")
+}
+
+# Namespace → API endpoint URL template (for audit trail)
+_ENDPOINT_TEMPLATES = {
+    "cves": "https://cveawg.mitre.org/api/cve/{id}",
+    "rfcs": "https://www.rfc-editor.org/rfc/rfc{id}.json",
+    "dois": "https://api.crossref.org/works/{id}",
+    "arxiv": "https://export.arxiv.org/api/query?id_list={id}",
+}
 
 
 def ground_anchors(
@@ -417,29 +440,40 @@ def ground_anchors(
         if not fetcher:
             continue
 
-        is_authoritative = anchor_type in _AUTHORITATIVE_NAMESPACES
+        is_definitive = anchor_type in _DEFINITIVE_NAMESPACES
+        authority_tier = _AUTHORITY_TIERS.get(anchor_type, "non_authoritative")
+        endpoint_tpl = _ENDPOINT_TEMPLATES.get(anchor_type)
         anchors = list(dict.fromkeys(citations.get(anchor_type, [])))  # dedup
         for anchor in anchors:
+            source_url = endpoint_tpl.format(id=anchor) if endpoint_tpl else None
+            fetch_ts = datetime.now(timezone.utc).isoformat()
+
             # Fetch authoritative metadata
             metadata = fetcher(anchor)
+
             if metadata is None:
-                if is_authoritative:
-                    # Authoritative API returned nothing → identifier doesn't exist
+                if is_definitive:
+                    # Authoritative/conventional API returned nothing → doesn't exist
                     n_not_found += 1
-                    details.append({
-                        "anchor": f"{anchor_type}:{anchor}",
-                        "metadata": None,
-                        "relevance": None,
-                        "grounding": "not_found",
-                    })
+                    status = "not_found"
+                    response_class = "404"
                 else:
                     n_failed += 1
-                    details.append({
-                        "anchor": f"{anchor_type}:{anchor}",
-                        "metadata": None,
-                        "relevance": None,
-                        "grounding": "fetch_failed",
-                    })
+                    status = "fetch_failed"
+                    response_class = "unknown"
+                details.append({
+                    "anchor": f"{anchor_type}:{anchor}",
+                    "namespace": anchor_type,
+                    "identifier": anchor,
+                    "status": status,
+                    "authority_tier": authority_tier,
+                    "source_url": source_url,
+                    "response_class": response_class,
+                    "timestamp": fetch_ts,
+                    "metadata": None,
+                    "relevance": None,
+                    "grounding": status,
+                })
                 continue
 
             n_grounded += 1
@@ -458,6 +492,13 @@ def ground_anchors(
 
             details.append({
                 "anchor": f"{anchor_type}:{anchor}",
+                "namespace": anchor_type,
+                "identifier": anchor,
+                "status": grounding,
+                "authority_tier": authority_tier,
+                "source_url": source_url,
+                "response_class": "200",
+                "timestamp": fetch_ts,
                 "metadata": metadata[:200] if metadata else None,
                 "relevance": round(relevance, 3),
                 "grounding": grounding,
