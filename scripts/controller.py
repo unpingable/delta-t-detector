@@ -4,9 +4,10 @@
 ======================================
 Uses top-2 logit margin at identifier tokens to make per-prompt decisions:
 
-  LOW_MARGIN_RETRY  — fork_risk < τ: model uncertain, retry at greedy
-  CONFIDENT_WRONG   — fork_risk >= τ AND oracle FAIL: don't waste tokens
-  FAST_PATH         — fork_risk >= τ AND oracle CLEAN/WARN: proceed
+  LOW_MARGIN_RETRY   — fork_risk < τ: model uncertain, retry at greedy
+  KNOWLEDGE_BOUNDARY — LOW_MARGIN_RETRY where retry also FAILs: stop, can't fix ignorance
+  CONFIDENT_WRONG    — fork_risk >= τ AND oracle FAIL: don't waste tokens
+  FAST_PATH          — fork_risk >= τ AND oracle CLEAN/WARN: proceed
 
 fork_risk = m_min from identifier windows (min margin across namespace triggers).
 τ default = 0.05 (conservative; Phi-3 CVE M_median=0.0, Qwen-3B CVE=0.05).
@@ -418,6 +419,11 @@ def run_prompt(
             retry_gain = _verdict_improved(result1["verdict"], result2["verdict"])
             retry_regression = _verdict_regressed(result1["verdict"], result2["verdict"])
 
+            # Promote to KNOWLEDGE_BOUNDARY if both attempts FAIL
+            # (greedy can't fix ignorance — stop paying token tax)
+            if result1["verdict"] == "FAIL" and result2["verdict"] == "FAIL":
+                policy = "KNOWLEDGE_BOUNDARY"
+
             final_result = result2
             final_text = text2
 
@@ -486,7 +492,7 @@ def print_summary(summary: dict):
     # Policy triggers
     print("Policy triggers:")
     n = summary["n_prompts"]
-    for policy in ("LOW_MARGIN_RETRY", "CONFIDENT_WRONG", "FAST_PATH"):
+    for policy in ("LOW_MARGIN_RETRY", "CONFIDENT_WRONG", "KNOWLEDGE_BOUNDARY", "FAST_PATH"):
         count = summary["policy_counts"].get(policy, 0)
         pct = count / n * 100 if n > 0 else 0
         print(f"  {policy:22s} {count:2d} ({pct:5.1f}%)")
@@ -582,7 +588,8 @@ def main():
     started_at = _utcnow_iso()
 
     # Aggregates
-    policy_counts = {"LOW_MARGIN_RETRY": 0, "CONFIDENT_WRONG": 0, "FAST_PATH": 0}
+    policy_counts = {"LOW_MARGIN_RETRY": 0, "CONFIDENT_WRONG": 0, "FAST_PATH": 0,
+                      "KNOWLEDGE_BOUNDARY": 0}
     verdict_counts: Dict[str, int] = {}
     retry_gain_count = 0
     retry_regression_count = 0
@@ -679,6 +686,7 @@ def main():
         "temperature": args.temperature,
         "retry_temperature": RETRY_TEMPERATURE,
         "seed": SEED_BASE,
+        "seed_derivation": "sha256(SEED_BASE|prompt_id|controller|attempt)",
         "n_prompts": n,
         "policy_counts": policy_counts,
         "retry_gain_count": retry_gain_count,

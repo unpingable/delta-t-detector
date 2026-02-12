@@ -174,6 +174,19 @@ M_median is the median per-prompt minimum margin across identifier windows. Phi-
 
 The causal chain: low margin → flat logits → temperature amplifies fork probability → seed sensitivity → fabrication variance. The margin is the cause; drift_class is the symptom. This can be computed online during generation to trigger controller mode switches.
 
+### 14. Margin-based runtime controller validates four terminal regimes
+
+Turning the margin metric into a live per-prompt policy (fork_risk = m_min at identifier windows, τ=0.05, retry at greedy):
+
+| Policy | Trigger | Qwen-3B CVE | Phi-3 CVE | Phi-3 PyPI |
+|---|---|---|---|---|
+| FAST_PATH | fork_risk >= τ, oracle pass | 60% | 20% | 40% |
+| LOW_MARGIN_RETRY | fork_risk < τ, retry helps | 30% | 60% (2 GAIN) | 60% (4 GAIN) |
+| KNOWLEDGE_BOUNDARY | fork_risk < τ, FAIL→FAIL | 10% | 10% | 0% |
+| CONFIDENT_WRONG | fork_risk >= τ, oracle fail | 0% | 10% | 0% |
+
+CONFIDENT_WRONG fires on Phi-3 CVE (m_min=0.18, oracle FAIL) but not Qwen-3B CVE (all fabrication at m_min=0.0). This validates the model-specific circuit breaker: Phi-3 confidently fabricates where Qwen-3B uncertainly fabricates. Different failure geometries → different policy paths. Zero regressions across all runs at τ=0.05. The controller is net-positive for all model+namespace combinations tested.
+
 ## Design Rules
 
 1. **Force checkable channels.** Require typed identifiers (`pypi:name==version`, `CVE-YYYY-NNNNN`), not URLs. Use authoritative existence oracles per namespace (MITRE CVE API, PyPI JSON, doi.org). HEAD/200 is not validation — `cve.mitre.org` returns 200 for nonexistent CVEs; Wikipedia returns 403 or 404 depending on platform. Only 200 and 404 from type-specific APIs are definitive.
