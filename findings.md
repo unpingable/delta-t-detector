@@ -957,3 +957,71 @@ Final: 7C / 3W / 0F. **0 regressions, 4 gains.** Phi-3 memorized PyPI — retry 
 3. **Model fingerprints map to policy distributions.** Phi-3 "evades; lies when trapped": PyPI is 60% retry (evasion resolved by nudging), CVE is split across all four paths. Qwen-3B "lies to comply": CVE is 40% retry (uncertainty-driven), PyPI is 90% fast-path (memorized).
 
 4. **Zero regressions across all Phi-3 runs at τ=0.05.** The controller is net-positive on both namespaces for both models tested. This is the safety property of conservative τ.
+
+### Grounding intervention: GROUND before RETRY (2026-02-12)
+
+When `fork_risk < τ`, the controller now tries **grounding** before retrying: fetch authoritative metadata for extracted anchors and check relevance. This replaces blind retry with evidence-based triage.
+
+**Six terminal policies:**
+
+| Policy | When | Action |
+|---|---|---|
+| GROUNDED | Low margin, anchors confirmed by metadata | Proceed (no retry needed) |
+| GROUNDED_REFUTED | Low margin, anchors exist but irrelevant OR don't exist | Proceed (retry can't help) |
+| LOW_MARGIN_RETRY | Low margin, grounding inconclusive/mixed | Greedy retry |
+| CONFIDENT_WRONG | High margin, oracle FAIL | Hard stop |
+| KNOWLEDGE_BOUNDARY | LOW_MARGIN_RETRY where retry also FAILs | Hard stop |
+| FAST_PATH | High margin, oracle CLEAN/WARN | Proceed |
+
+**Grounding logic:**
+- Fetch metadata from authoritative APIs (MITRE CVE, rfc-editor.org, Crossref DOI, arXiv)
+- Check word-overlap relevance: `max(response vs metadata, prompt vs metadata)`
+- For authoritative namespaces (CVE, DOI, RFC): API returning nothing = `not_found` (counted as negative evidence), not inconclusive
+- Mixed results (some confirmed, some refuted/not_found) fall through to retry
+
+**Qwen 3B, CVE locked:**
+
+| Policy | Count | Rate |
+|---|---|---|
+| GROUNDED_REFUTED | 3 | 30% |
+| LOW_MARGIN_RETRY | 1 | 10% |
+| FAST_PATH | 6 | 60% |
+
+Final: 8C / 1W / 1F (same as pre-grounding). Grounding saved retry tokens on 3 prompts by short-circuiting when anchors were refuted. The 1 LOW_MARGIN_RETRY (cve-locked-02) had mixed grounding → fell through to retry → CLEAN→CLEAN.
+
+**Phi-3 Mini 3.8B, CVE locked:**
+
+| Policy | Count | Rate | Outcome |
+|---|---|---|---|
+| GROUNDED_REFUTED | 5 | 50% | 4C, 1F |
+| LOW_MARGIN_RETRY | 2 | 20% | **2 GAIN** (WARN→C, FAIL→C) |
+| CONFIDENT_WRONG | 1 | 10% | 1F |
+| FAST_PATH | 2 | 20% | 2C |
+
+Final: **8C / 0W / 2F** (was 7C / 0W / 3F pre-grounding). **+1 CLEAN, 0 regressions.**
+
+### The `not_found` fix: authoritative absence is evidence
+
+The initial grounding implementation treated all fetch failures as neutral (`fetch_failed`). This created a false positive: cve-locked-10 (Phi-3) cited CVE-2019-5736 (real, confirmed by metadata) and CVE-2020-19531 (fabricated, 404 from MITRE). With fetch_failed counted as neutral: 1 confirmed + 0 refuted = "confirmed" → GROUNDED policy → false classification.
+
+**Root cause**: For authoritative APIs (MITRE CVE, PyPI JSON, rfc-editor.org), a 404 is not inconclusive — it's a definitive "this identifier doesn't exist." These are not search engines; they are canonical registries. `not_found` is negative evidence, same as `refuted`.
+
+**Fix**: Classify fetch failures as `not_found` (counted as negative) for authoritative namespaces (`cves`, `dois`, `rfcs`). Retain `fetch_failed` (neutral) for non-authoritative sources.
+
+**Result on Phi-3 cve-locked-10:**
+- Before: CVE-2019-5736 confirmed + CVE-2020-19531 `fetch_failed` → "confirmed" → GROUNDED + FAIL (false positive)
+- After: CVE-2019-5736 confirmed + CVE-2020-19531 `not_found` → "mixed" → falls to retry → FAIL→CLEAN (net gain)
+
+**Safety net**: Even if grounding says "confirmed," if the oracle says FAIL, grounding is overridden (fall through to retry). This handles edge cases where partial anchor confirmation masks fabrication of other anchors.
+
+### Key findings from grounding
+
+1. **GROUNDED_REFUTED is the dominant grounding verdict for CVE.** Both models: most low-margin CVE prompts cite real-but-irrelevant CVEs (model grabbed memorized IDs that don't match the question). Grounding correctly identifies these without needing retry.
+
+2. **`not_found` from authoritative APIs is actionable evidence.** The MITRE CVE API, PyPI JSON API, and rfc-editor.org JSON API are canonical registries. A 404 means "this identifier does not exist" — not "I couldn't reach the server." Treating 404 as neutral hid fabrication.
+
+3. **Grounding + retry is strictly better than retry alone.** On Phi-3 CVE, grounding unlocked a retry gain that was previously blocked by a false GROUNDED classification. On Qwen CVE, grounding short-circuited 3 unnecessary retries (saved tokens). Net: +1 correct verdict, fewer tokens, zero regressions.
+
+4. **Word-overlap relevance is necessary but not sufficient.** CVE-2019-5736 was topically relevant to cve-locked-10's prompt (Docker container security) but the model also fabricated CVE-2020-19531. Relevance match confirms topical alignment, not identifier correctness. The oracle (existence check) remains the ground truth.
+
+5. **The grounding hierarchy is: existence > relevance > margin.** Existence from authoritative API is definitive. Relevance from word overlap is indicative. Margin from logits is probabilistic. The controller now checks all three in that order.

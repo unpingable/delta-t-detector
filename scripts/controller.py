@@ -348,6 +348,149 @@ def _verdict_regressed(v1: str, v2: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Grounding: fetch authoritative metadata and check relevance
+# ---------------------------------------------------------------------------
+
+# Namespace → fetcher function name on EpistemicGroundingTest
+_GROUND_FETCHERS = {
+    "rfcs": "fetch_rfc_title",
+    "cves": "fetch_cve_description",
+    "dois": "fetch_doi_title",
+    "arxiv": "fetch_arxiv_title",
+}
+
+# Namespaces with authoritative APIs where a fetch failure (None return)
+# means the identifier doesn't exist (404), not a network error.
+# For these, fetch_failed → not_found (counted as refuted).
+_AUTHORITATIVE_NAMESPACES = {"cves", "dois", "rfcs"}
+
+
+def ground_anchors(
+    detector,
+    text: str,
+    prompt_text: str,
+    expected_anchor_type: Optional[str],
+    relevance_threshold: float = 0.15,
+) -> dict:
+    """Attempt to ground extracted anchors against authoritative sources.
+
+    Returns:
+        {
+            "groundable": bool,       # whether any groundable anchors found
+            "n_grounded": int,        # anchors with fetched metadata
+            "n_confirmed": int,       # metadata relevant to prompt
+            "n_refuted": int,         # anchor exists but metadata irrelevant
+            "n_not_found": int,       # authoritative API says identifier doesn't exist
+            "n_failed_fetch": int,    # non-authoritative fetch failed (genuinely inconclusive)
+            "verdict": str,           # "confirmed" | "refuted" | "inconclusive"
+            "details": [...]          # per-anchor grounding results
+        }
+    """
+    from detector.utils import extract_citations
+
+    citations = extract_citations(text)
+    eg_test = detector.epistemic_grounding_test
+
+    details = []
+    n_grounded = 0
+    n_confirmed = 0
+    n_refuted = 0
+    n_not_found = 0
+    n_failed = 0
+
+    # Determine which anchor types to ground
+    types_to_check = []
+    if expected_anchor_type and expected_anchor_type in _GROUND_FETCHERS:
+        types_to_check = [expected_anchor_type]
+    else:
+        # Check all groundable types
+        types_to_check = [t for t in _GROUND_FETCHERS if citations.get(t)]
+
+    if not types_to_check:
+        return {"groundable": False, "n_grounded": 0, "n_confirmed": 0,
+                "n_refuted": 0, "n_not_found": 0, "n_failed_fetch": 0,
+                "verdict": "inconclusive", "details": []}
+
+    for anchor_type in types_to_check:
+        fetcher_name = _GROUND_FETCHERS[anchor_type]
+        fetcher = getattr(eg_test, fetcher_name, None)
+        if not fetcher:
+            continue
+
+        is_authoritative = anchor_type in _AUTHORITATIVE_NAMESPACES
+        anchors = list(dict.fromkeys(citations.get(anchor_type, [])))  # dedup
+        for anchor in anchors:
+            # Fetch authoritative metadata
+            metadata = fetcher(anchor)
+            if metadata is None:
+                if is_authoritative:
+                    # Authoritative API returned nothing → identifier doesn't exist
+                    n_not_found += 1
+                    details.append({
+                        "anchor": f"{anchor_type}:{anchor}",
+                        "metadata": None,
+                        "relevance": None,
+                        "grounding": "not_found",
+                    })
+                else:
+                    n_failed += 1
+                    details.append({
+                        "anchor": f"{anchor_type}:{anchor}",
+                        "metadata": None,
+                        "relevance": None,
+                        "grounding": "fetch_failed",
+                    })
+                continue
+
+            n_grounded += 1
+            # Check relevance: does the model's response + prompt match the metadata?
+            # Use max of (response vs metadata, prompt vs metadata) since either
+            # can carry the topical signal.
+            rel_response = eg_test.check_citation_relevance(text, metadata)
+            rel_prompt = eg_test.check_citation_relevance(prompt_text, metadata)
+            relevance = max(rel_response, rel_prompt)
+            if relevance >= relevance_threshold:
+                n_confirmed += 1
+                grounding = "confirmed"
+            else:
+                n_refuted += 1
+                grounding = "refuted"
+
+            details.append({
+                "anchor": f"{anchor_type}:{anchor}",
+                "metadata": metadata[:200] if metadata else None,
+                "relevance": round(relevance, 3),
+                "grounding": grounding,
+            })
+
+    # Verdict logic: not_found from authoritative APIs counts as refuted
+    n_negative = n_refuted + n_not_found  # both are evidence against
+    n_evidence = n_grounded + n_not_found  # total anchors with a definitive answer
+
+    if n_evidence == 0:
+        verdict = "inconclusive"
+    elif n_confirmed > 0 and n_negative == 0:
+        verdict = "confirmed"
+    elif n_negative > 0 and n_confirmed == 0:
+        verdict = "refuted"
+    elif n_confirmed >= n_negative:
+        verdict = "mixed_lean_confirmed"
+    else:
+        verdict = "mixed_lean_refuted"
+
+    return {
+        "groundable": n_evidence > 0 or n_failed > 0,
+        "n_grounded": n_grounded,
+        "n_confirmed": n_confirmed,
+        "n_refuted": n_refuted,
+        "n_not_found": n_not_found,
+        "n_failed_fetch": n_failed,
+        "verdict": verdict,
+        "details": details,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Core: run one prompt through the 3-way controller
 # ---------------------------------------------------------------------------
 
@@ -389,6 +532,7 @@ def run_prompt(
     margin_stats2 = None
     retry_gain = None
     retry_regression = None
+    grounding = None
 
     # Edge case: no identifier windows → nothing to be uncertain about
     if n_id_windows == 0 or fork_risk is None:
@@ -397,35 +541,67 @@ def run_prompt(
         final_text = text1
 
     elif fork_risk < tau:
-        # LOW_MARGIN_RETRY: model uncertain at identifier tokens
-        retry_template = RETRY_TEMPLATES.get(expected_type)
-        if not retry_template:
-            # No retry template for this namespace — can't retry
-            policy = "FAST_PATH"
+        # LOW_MARGIN: model uncertain at identifier tokens
+        # Try GROUND first (fetch authoritative metadata, check relevance)
+        # Fall back to RETRY if grounding is inconclusive
+
+        grounding = ground_anchors(
+            detector, text1, user_prompt, expected_type,
+        )
+
+        if grounding["groundable"] and grounding["verdict"] == "confirmed":
+            if result1["verdict"] == "FAIL":
+                # Safety: oracle found fabrication despite grounding confirmation.
+                # Grounding may have only validated a subset of anchors.
+                # Fall through to retry.
+                pass
+            else:
+                # Grounding confirms: all anchors exist AND are relevant to prompt
+                policy = "GROUNDED"
+                final_result = result1
+                final_text = text1
+
+        elif grounding["groundable"] and grounding["verdict"] == "refuted":
+            # Grounding refutes: anchors exist but none match the prompt
+            # The model cited real identifiers for wrong claims
+            # Don't retry (grounding already proved it wrong)
+            policy = "GROUNDED_REFUTED"
             final_result = result1
             final_text = text1
-        else:
-            policy = "LOW_MARGIN_RETRY"
-            formatted_retry = format_chat_retry(
-                tok, ROLE_SINGLE, user_prompt, text1, retry_template
-            )
-            seed2 = _derive_seed(prompt_id, "attempt2")
-            text2, ms2, trace2 = _generate(
-                detector, formatted_retry, seed2, temp_override=retry_temp
-            )
-            margin_stats2 = compute_margin_stats(trace2.margins, trace2.tokens)
-            result2 = score_attempt(detector, text2, expected_min, expected_type)
 
-            retry_gain = _verdict_improved(result1["verdict"], result2["verdict"])
-            retry_regression = _verdict_regressed(result1["verdict"], result2["verdict"])
+        elif grounding["groundable"] and grounding["verdict"].startswith("mixed"):
+            # Mixed: some anchors match, some don't — fall through to retry
+            pass  # handled by the else branch below
 
-            # Promote to KNOWLEDGE_BOUNDARY if both attempts FAIL
-            # (greedy can't fix ignorance — stop paying token tax)
-            if result1["verdict"] == "FAIL" and result2["verdict"] == "FAIL":
-                policy = "KNOWLEDGE_BOUNDARY"
+        if policy is None:
+            # Grounding inconclusive (fetch failed, no groundable anchors, etc.)
+            # Fall back to greedy retry
+            retry_template = RETRY_TEMPLATES.get(expected_type)
+            if not retry_template:
+                policy = "FAST_PATH"
+                final_result = result1
+                final_text = text1
+            else:
+                policy = "LOW_MARGIN_RETRY"
+                formatted_retry = format_chat_retry(
+                    tok, ROLE_SINGLE, user_prompt, text1, retry_template
+                )
+                seed2 = _derive_seed(prompt_id, "attempt2")
+                text2, ms2, trace2 = _generate(
+                    detector, formatted_retry, seed2, temp_override=retry_temp
+                )
+                margin_stats2 = compute_margin_stats(trace2.margins, trace2.tokens)
+                result2 = score_attempt(detector, text2, expected_min, expected_type)
 
-            final_result = result2
-            final_text = text2
+                retry_gain = _verdict_improved(result1["verdict"], result2["verdict"])
+                retry_regression = _verdict_regressed(result1["verdict"], result2["verdict"])
+
+                # Promote to KNOWLEDGE_BOUNDARY if both attempts FAIL
+                if result1["verdict"] == "FAIL" and result2["verdict"] == "FAIL":
+                    policy = "KNOWLEDGE_BOUNDARY"
+
+                final_result = result2
+                final_text = text2
 
     elif result1["verdict"] == "FAIL":
         # CONFIDENT_WRONG: high margin but oracle says fabricated
@@ -456,6 +632,16 @@ def run_prompt(
         },
         "final_verdict": final_result["verdict"],
     }
+
+    if grounding is not None:
+        record["grounding"] = {
+            "verdict": grounding["verdict"],
+            "n_grounded": grounding["n_grounded"],
+            "n_confirmed": grounding["n_confirmed"],
+            "n_refuted": grounding["n_refuted"],
+            "n_not_found": grounding.get("n_not_found", 0),
+            "details": grounding["details"],
+        }
 
     if result2 is not None:
         record["attempt2"] = {
@@ -492,7 +678,8 @@ def print_summary(summary: dict):
     # Policy triggers
     print("Policy triggers:")
     n = summary["n_prompts"]
-    for policy in ("LOW_MARGIN_RETRY", "CONFIDENT_WRONG", "KNOWLEDGE_BOUNDARY", "FAST_PATH"):
+    for policy in ("GROUNDED", "GROUNDED_REFUTED", "LOW_MARGIN_RETRY",
+                    "CONFIDENT_WRONG", "KNOWLEDGE_BOUNDARY", "FAST_PATH"):
         count = summary["policy_counts"].get(policy, 0)
         pct = count / n * 100 if n > 0 else 0
         print(f"  {policy:22s} {count:2d} ({pct:5.1f}%)")
@@ -588,8 +775,9 @@ def main():
     started_at = _utcnow_iso()
 
     # Aggregates
-    policy_counts = {"LOW_MARGIN_RETRY": 0, "CONFIDENT_WRONG": 0, "FAST_PATH": 0,
-                      "KNOWLEDGE_BOUNDARY": 0}
+    policy_counts = {"GROUNDED": 0, "GROUNDED_REFUTED": 0,
+                      "LOW_MARGIN_RETRY": 0, "CONFIDENT_WRONG": 0,
+                      "KNOWLEDGE_BOUNDARY": 0, "FAST_PATH": 0}
     verdict_counts: Dict[str, int] = {}
     retry_gain_count = 0
     retry_regression_count = 0

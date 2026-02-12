@@ -14,10 +14,11 @@
 10. Two-stage decoding (primary warm, retry greedy) eliminates retry harm on memorized namespaces; scale makes it redundant
 11. Seed sensitivity is a model fingerprint: Qwen is stable, Phi-3 is chaotic even at greedy
 12. Top-2 logit margin at identifier tokens predicts drift_class: Phi-3 CVE has median margin 0.0 (half tokens at tie)
+13. Margin-based controller with authoritative grounding yields six terminal policies; authoritative 404 is evidence, not absence of evidence
 
 ---
 
-**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Findings 11-13 quantify seed sensitivity and its mechanistic cause (top-2 margin).
+**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Findings 11-13 quantify seed sensitivity and its mechanistic cause (top-2 margin); Finding 14 builds a runtime controller with authoritative grounding.
 
 ## Findings
 
@@ -174,18 +175,22 @@ M_median is the median per-prompt minimum margin across identifier windows. Phi-
 
 The causal chain: low margin → flat logits → temperature amplifies fork probability → seed sensitivity → fabrication variance. The margin is the cause; drift_class is the symptom. This can be computed online during generation to trigger controller mode switches.
 
-### 14. Margin-based runtime controller validates four terminal regimes
+### 14. Margin-based runtime controller with grounding validates six terminal regimes
 
-Turning the margin metric into a live per-prompt policy (fork_risk = m_min at identifier windows, τ=0.05, retry at greedy):
+Turning the margin metric into a live per-prompt policy (fork_risk = m_min at identifier windows, τ=0.05). When fork_risk < τ, the controller first attempts **grounding** (fetch authoritative metadata, check relevance) before falling back to greedy retry.
 
-| Policy | Trigger | Qwen-3B CVE | Phi-3 CVE | Phi-3 PyPI |
-|---|---|---|---|---|
-| FAST_PATH | fork_risk >= τ, oracle pass | 60% | 20% | 40% |
-| LOW_MARGIN_RETRY | fork_risk < τ, retry helps | 30% | 60% (2 GAIN) | 60% (4 GAIN) |
-| KNOWLEDGE_BOUNDARY | fork_risk < τ, FAIL→FAIL | 10% | 10% | 0% |
-| CONFIDENT_WRONG | fork_risk >= τ, oracle fail | 0% | 10% | 0% |
+| Policy | Trigger | Qwen-3B CVE | Phi-3 CVE |
+|---|---|---|---|
+| GROUNDED | Low margin, anchors confirmed | 0% | 0% |
+| GROUNDED_REFUTED | Low margin, anchors refuted/not_found | 30% | 50% |
+| LOW_MARGIN_RETRY | Low margin, grounding inconclusive | 10% | 20% (2 GAIN) |
+| CONFIDENT_WRONG | High margin, oracle FAIL | 0% | 10% |
+| KNOWLEDGE_BOUNDARY | Retry also FAILs | 0% | 0% |
+| FAST_PATH | High margin, oracle pass | 60% | 20% |
 
-CONFIDENT_WRONG fires on Phi-3 CVE (m_min=0.18, oracle FAIL) but not Qwen-3B CVE (all fabrication at m_min=0.0). This validates the model-specific circuit breaker: Phi-3 confidently fabricates where Qwen-3B uncertainly fabricates. Different failure geometries → different policy paths. Zero regressions across all runs at τ=0.05. The controller is net-positive for all model+namespace combinations tested.
+Key design insight: for authoritative APIs (MITRE CVE, PyPI JSON, rfc-editor.org), a 404 is `not_found` — evidence of non-existence, not inconclusive. Treating it as neutral created a false positive (grounding "confirmed" a prompt with one real + one fabricated CVE). Counting `not_found` as negative evidence fixed the classification and unlocked a retry gain (FAIL→CLEAN on Phi-3).
+
+CONFIDENT_WRONG fires on Phi-3 CVE (m_min=0.18, oracle FAIL) but not Qwen-3B CVE (all fabrication at m_min=0.0). Grounding saves retry tokens when anchors can be resolved. Zero regressions at τ=0.05 across all runs.
 
 ## Design Rules
 

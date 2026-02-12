@@ -616,8 +616,69 @@ class EpistemicGroundingTest:
         return result
 
     # ------------------------------------------------------------------
-    # Title fetch for mismatch detection
+    # Title/description fetch for grounding + mismatch detection
     # ------------------------------------------------------------------
+
+    def fetch_rfc_title(self, rfc_number: str) -> Optional[str]:
+        """Fetch RFC title from rfc-editor.org datatracker API. Returns None on failure."""
+        try:
+            import requests
+            resp = requests.get(
+                f"https://www.rfc-editor.org/rfc/rfc{rfc_number}.json",
+                headers={"User-Agent": self._USER_AGENT},
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("title")
+        except Exception:
+            pass
+        # Fallback: parse title from the text page
+        try:
+            import requests
+            resp = requests.get(
+                f"https://www.rfc-editor.org/rfc/rfc{rfc_number}",
+                headers={"User-Agent": self._USER_AGENT,
+                         "Accept": "text/plain"},
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                # Title is typically in the first 20 lines
+                for line in resp.text.splitlines()[:30]:
+                    line = line.strip()
+                    if len(line) > 10 and not line.startswith("Internet") \
+                       and not line.startswith("Request") \
+                       and not line.startswith("Network") \
+                       and "RFC" not in line[:10]:
+                        return line
+        except Exception:
+            pass
+        return None
+
+    def fetch_cve_description(self, cve_id: str) -> Optional[str]:
+        """Fetch CVE description from MITRE CVE API. Returns None on failure."""
+        cve_id = cve_id.upper()
+        try:
+            import requests
+            resp = requests.get(
+                f"https://cveawg.mitre.org/api/cve/{cve_id}",
+                headers={"User-Agent": self._USER_AGENT},
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # CNA container has descriptions
+                cna = data.get("containers", {}).get("cna", {})
+                descriptions = cna.get("descriptions", [])
+                for desc in descriptions:
+                    if desc.get("lang", "en").startswith("en"):
+                        return desc.get("value")
+                # Fallback: any description
+                if descriptions:
+                    return descriptions[0].get("value")
+        except Exception:
+            pass
+        return None
 
     def fetch_doi_title(self, doi: str) -> Optional[str]:
         """Fetch paper title from Crossref API. Returns None on failure."""
