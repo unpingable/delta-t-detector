@@ -730,3 +730,67 @@ Two-stage converts the same-temp harm (WARN→FAIL) to persistent evasion (WARN�
 4. **The controller's value is model- and namespace-dependent.** Maximum value: Phi-3 on memorized namespaces (eliminates all harm). Zero value: Qwen 7B on anything (no evasion to retry). Partial value: any model on unmemorized namespaces.
 
 5. **Scale makes the controller redundant.** At 7B, Qwen produces 0 evasion, so two-stage has nothing to act on. The controller is most valuable at small scale where models evade more and knowledge boundaries are wider. As scale increases, the need for retry-based intervention diminishes.
+
+---
+
+## Overnight Drift Check (3 seeds × 3 models × 2 lanes × 2 temps)
+
+### Setup
+
+56 runs total (36 coupling + 18 retry + 2 resolver-heavy), 82 minutes. Seeds: 42, 137, 271. Drift classification: STABLE (<5pp spread), SEED_SENSITIVE (5–15pp), CHAOTIC (>15pp).
+
+### Two-axis drift table (fab_rate_mean + fab_rate_spread)
+
+| Model | Lane | Temp | Mean | Spread | Drift Class |
+|---|---|---|---|---|---|
+| Qwen-3B | pypi_locked | 0.0 | 20.0% | 0.0pp | STABLE |
+| Qwen-3B | pypi_locked | 0.7 | 29.3% | 10.0pp | SEED_SENSITIVE |
+| Qwen-3B | cve_locked | 0.0 | 14.0% | 1.0pp | STABLE |
+| Qwen-3B | cve_locked | 0.7 | 10.0% | 2.4pp | STABLE |
+| Qwen-7B-4bit | pypi_locked | 0.0 | 5.0% | 0.0pp | STABLE |
+| Qwen-7B-4bit | pypi_locked | 0.7 | 8.3% | 5.0pp | STABLE |
+| Qwen-7B-4bit | cve_locked | 0.0 | 4.9% | 0.1pp | STABLE |
+| Qwen-7B-4bit | cve_locked | 0.7 | 5.0% | 3.7pp | STABLE |
+| Phi-3-Mini | pypi_locked | 0.0 | 5.7% | 5.4pp | SEED_SENSITIVE |
+| Phi-3-Mini | pypi_locked | 0.7 | 5.1% | 15.2pp | CHAOTIC |
+| Phi-3-Mini | cve_locked | 0.0 | 23.2% | 11.3pp | SEED_SENSITIVE |
+| Phi-3-Mini | cve_locked | 0.7 | 27.4% | 27.3pp | CHAOTIC |
+
+### Retry controller stability (two-stage, 3 seeds)
+
+| Model | Lane | Retries | → Clean | → Fail | → Persistent |
+|---|---|---|---|---|---|
+| Phi-3 | pypi_locked | [3, 5, 4] | [3, 5, 4] | [0, 0, 0] | [0, 0, 0] |
+| Phi-3 | cve_locked | [2, 1, 0] | [1, 1, 0] | [1, 0, 0] | [0, 0, 0] |
+| Qwen-3B | pypi_locked | [0, 2, 2] | [0, 1, 1] | [0, 0, 0] | [0, 1, 1] |
+| Qwen-3B | cve_locked | [1, 1, 1] | [0, 0, 0] | [0, 0, 0] | [1, 1, 1] |
+| Qwen-7B | both | [0, 0, 0] | — | — | — |
+
+### Resolver health
+
+3,691 anchors resolved, 2.7% error rate. By endpoint:
+
+| Resolver | Found | Not Found | Error/Timeout/Ambiguous |
+|---|---|---|---|
+| rfc-editor.org | 100% | 0% | 0% |
+| arxiv.org | 99% | 1% | 0% |
+| cveawg.mitre.org | 85% | 15% | 0% |
+| pypi.org | 83% | 17% | 0% |
+| doi.org | 37% | 63% | 0% |
+| HEAD (generic) | 79% | 9% | 12% |
+
+### Key observations
+
+1. **Seed sensitivity is itself a model fingerprint.** Qwen is STABLE everywhere at greedy and mostly stable at t=0.7 (only PyPI at t=0.7 is SEED_SENSITIVE). Phi-3 is CHAOTIC at t=0.7 and still SEED_SENSITIVE at greedy. Qwen-7B is STABLE everywhere. The drift classification is: Qwen-7B > Qwen-3B >> Phi-3.
+
+2. **Greedy does not fully stabilize Phi-3.** CVE locked at t=0.0 still shows 11.3pp spread across seeds. This likely reflects the pseudo-greedy approximation (temp=0.01) interacting with Phi-3's flatter logit distributions. Qwen's sharper logits make pseudo-greedy effectively deterministic.
+
+3. **Qwen-3B PyPI greedy is 20%, not 0%.** Previous findings of "0% at greedy" came from prompt-level FAIL counts (retry_enforcement), not anchor-level fabrication (coupling). The 20% is consistent across all 3 seeds — it's a stable knowledge-boundary fabrication of individual versions, but not enough per-prompt to trigger FAIL.
+
+4. **The two-stage controller is perfectly safe for Phi-3 on PyPI across all seeds.** 12 retries across 3 seeds, 12 resolved_clean, 0 harm. This is the strongest result: the controller works reliably where it matters most.
+
+5. **Qwen-3B CVE retry is perfectly deterministic.** 3/3 seeds produce exactly 1 retry → persistent_evasion. The model deterministically refuses at greedy on the same CVE prompt across all seeds.
+
+6. **HEAD-based resolution is the weak link.** 12% error/timeout/ambiguous rate vs <1% for authoritative APIs. Generic URL validation remains fragile.
+
+7. **doi.org has 63% not-found rate** — consistent with DOI being the hardest namespace (highest fabrication). The resolver is working correctly; the model is fabricating DOIs.

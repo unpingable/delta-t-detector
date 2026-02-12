@@ -275,8 +275,22 @@ def audit_resolvers():
 # Drift analysis
 # ---------------------------------------------------------------------------
 
+def classify_drift(spread):
+    """Classify seed sensitivity: STABLE (<5pp), SEED_SENSITIVE (5-15pp), CHAOTIC (>15pp)."""
+    if spread <= 5.0:
+        return "STABLE"
+    elif spread <= 15.0:
+        return "SEED_SENSITIVE"
+    else:
+        return "CHAOTIC"
+
+
 def analyze_drift(results):
-    """Analyze fabrication rate drift across seeds. Returns (stable, report)."""
+    """Analyze fabrication rate drift across seeds.
+
+    Returns (all_stable, report_text, drift_table).
+    drift_table: list of dicts with two-axis scores (mean + spread).
+    """
     # Group by (model, lane, temp)
     groups = defaultdict(list)
     for r in results:
@@ -285,6 +299,7 @@ def analyze_drift(results):
             groups[key].append(r["fab_rate"])
 
     report_lines = []
+    drift_table = []
     all_stable = True
     for key, rates in sorted(groups.items()):
         model, lane, temp = key
@@ -292,16 +307,26 @@ def analyze_drift(results):
             continue
         min_r, max_r = min(rates), max(rates)
         spread = max_r - min_r
-        stable = spread <= 5.0
-        if not stable:
+        mean = sum(rates) / len(rates)
+        drift_class = classify_drift(spread)
+        if drift_class != "STABLE":
             all_stable = False
-        status = "STABLE" if stable else "DRIFT"
         report_lines.append(
-            f"  {status}  {model:20s} {lane:15s} t={temp}  "
-            f"rates={[f'{r:.1f}%' for r in rates]}  spread={spread:.1f}pp"
+            f"  {drift_class:15s} {model:20s} {lane:15s} t={temp}  "
+            f"mean={mean:.1f}%  spread={spread:.1f}pp  "
+            f"rates={[f'{r:.1f}%' for r in rates]}"
         )
+        drift_table.append({
+            "model": model,
+            "lane": lane,
+            "temp": temp,
+            "fab_rate_mean": round(mean, 1),
+            "fab_rate_spread": round(spread, 1),
+            "drift_class": drift_class,
+            "rates": [round(r, 1) for r in rates],
+        })
 
-    return all_stable, "\n".join(report_lines)
+    return all_stable, "\n".join(report_lines), drift_table
 
 
 # ---------------------------------------------------------------------------
@@ -448,18 +473,22 @@ def main():
     # Drift analysis
     # -----------------------------------------------------------------------
     print(f"\n{'='*70}")
-    print("DRIFT ANALYSIS (±5pp gate)")
+    print("DRIFT ANALYSIS (STABLE <5pp | SEED_SENSITIVE 5-15pp | CHAOTIC >15pp)")
     print(f"{'='*70}")
-    all_stable, drift_report = analyze_drift(coupling_results)
+    all_stable, drift_report, drift_table = analyze_drift(coupling_results)
     if drift_report:
         print(drift_report)
     else:
         print("  (insufficient data for drift analysis)")
     print()
+    n_stable = sum(1 for d in drift_table if d["drift_class"] == "STABLE")
+    n_sensitive = sum(1 for d in drift_table if d["drift_class"] == "SEED_SENSITIVE")
+    n_chaotic = sum(1 for d in drift_table if d["drift_class"] == "CHAOTIC")
+    print(f"  STABLE: {n_stable}  SEED_SENSITIVE: {n_sensitive}  CHAOTIC: {n_chaotic}")
     if all_stable:
         print("  PASS: All conditions within ±5pp across seeds.")
     else:
-        print("  WARNING: Some conditions show >5pp spread — seed-sensitive territory.")
+        print("  WARNING: Some conditions are seed-sensitive or chaotic.")
 
     # -----------------------------------------------------------------------
     # Retry stability
@@ -528,6 +557,7 @@ def main():
         "total_failures": total_failures,
         "elapsed_min": round(total_elapsed / 60, 1),
         "drift_stable": all_stable,
+        "drift_table": drift_table,
         "coupling_results": coupling_results,
         "retry_results": retry_results,
         "resolver_stats": resolver_stats,

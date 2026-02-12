@@ -12,10 +12,11 @@
 8. Models show distinct policy fingerprints: "lies to comply" (Qwen) vs "evades; lies when trapped" (Phi-3)
 9. Scale (3B→7B) halves fabrication and closes knowledge boundaries; 4-bit quantization preserves the effect
 10. Two-stage decoding (primary warm, retry greedy) eliminates retry harm on memorized namespaces; scale makes it redundant
+11. Seed sensitivity is a model fingerprint: Qwen is stable, Phi-3 is chaotic even at greedy
 
 ---
 
-**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Finding 11 validates the two-stage controller policy.
+**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Finding 11 validates the two-stage controller; Finding 12 quantifies seed sensitivity.
 
 ## Findings
 
@@ -145,6 +146,18 @@ Comparing three retry policies (no retry, same-temp retry at 0.7, two-stage with
 | Qwen 7B | both | — (0 retries) | — (0 retries) | — |
 
 Two-stage eliminates all retry harm when the model knows the answer (memorized namespace + behavioral evasion). On unmemorized namespaces, harm drops but persists — greedy can't fix ignorance. For Qwen, two-stage converts WARN→FAIL to persistent evasion (WARN→WARN), which is strictly safer. At 7B scale, the controller becomes redundant — no evasion means nothing to retry.
+
+### 12. Seed sensitivity is a model fingerprint
+
+3-seed drift check (seeds 42, 137, 271) across all models and lanes:
+
+| Model | Drift class at t=0.7 | Drift class at t=0 |
+|---|---|---|
+| Qwen-7B-4bit | STABLE (max 5pp) | STABLE (max 0.1pp) |
+| Qwen-3B | SEED_SENSITIVE on PyPI (10pp) | STABLE (max 1pp) |
+| Phi-3-Mini | CHAOTIC (CVE 27pp, PyPI 15pp) | SEED_SENSITIVE (CVE 11pp) |
+
+Seed sensitivity is inversely correlated with model quality. Qwen-7B is rock-stable everywhere. Qwen-3B drifts only at sampling temperature on its weakest namespace. Phi-3 is chaotic at t=0.7 and still seed-sensitive at pseudo-greedy — the model's logit surface is flatter, so even minimal temperature creates large behavioral variation. The two-stage controller is perfectly safe across all 3 seeds for Phi-3 on PyPI (12/12 retries → clean, 0 harm).
 
 ## Design Rules
 
