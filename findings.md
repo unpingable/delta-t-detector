@@ -851,3 +851,69 @@ M_median is the median of per-prompt M_min values. M_mean is the mean margin acr
 - Temperature sweep (t=0.3, 0.5, 0.7, 1.0) to map stability curves per namespace
 - Namespace Sensitivity Index: `NSI = variance_across_models + variance_across_decoding` — high NSI = underrepresented/fragile
 - Retry elasticity: `retry_gain = fab_initial - fab_post_retry` — high gain = entropy failure, low gain = structural absence
+
+---
+
+## 3-Way Margin-Based Runtime Controller (2026-02-12)
+
+Turns the top-2 margin metric into a live per-prompt decision: retry, hard-stop, or proceed.
+
+### Controller design
+
+| Condition | Policy | Action |
+|---|---|---|
+| `fork_risk < τ` | LOW_MARGIN_RETRY | Force greedy retry, re-validate |
+| `fork_risk >= τ` AND oracle FAIL | CONFIDENT_WRONG | Hard stop — don't waste tokens |
+| `fork_risk >= τ` AND oracle CLEAN/WARN | FAST_PATH | Proceed |
+
+- `fork_risk` = `m_min` from identifier windows (min margin across namespace triggers)
+- `τ = 0.05` (conservative default)
+- Oracle = EG validator (authoritative API checks)
+
+### Results: Qwen 3B, τ=0.05, t=0.7, seed=42
+
+**PyPI locked (10 prompts):**
+
+| Policy | Count | Rate |
+|---|---|---|
+| FAST_PATH | 9 | 90% |
+| LOW_MARGIN_RETRY | 1 | 10% |
+| CONFIDENT_WRONG | 0 | 0% |
+
+Final: 10C / 0W / 0F. The single retry (pypi-locked-02, m_min=0.0000) was neutral: CLEAN→CLEAN. No fabrication at this seed.
+
+**CVE locked (10 prompts):**
+
+| Policy | Count | Rate |
+|---|---|---|
+| FAST_PATH | 6 | 60% |
+| LOW_MARGIN_RETRY | 4 | 40% |
+| CONFIDENT_WRONG | 0 | 0% |
+
+Final: 8C / 1W / 1F. All 4 LOW_MARGIN_RETRY prompts had m_min=0.0000 (complete top-2 tie). Retry outcomes:
+- 3× CLEAN→CLEAN (neutral — model was right despite uncertainty)
+- 1× FAIL→FAIL (cve-locked-04: knowledge boundary, greedy can't fix ignorance)
+
+### τ sensitivity test: CVE locked, τ=0.10
+
+Raising τ from 0.05 to 0.10 captures more prompts:
+
+| Policy | τ=0.05 | τ=0.10 |
+|---|---|---|
+| FAST_PATH | 6 | 3 |
+| LOW_MARGIN_RETRY | 4 | 7 |
+| CONFIDENT_WRONG | 0 | 0 |
+
+But introduces **1 regression**: cve-locked-09 was CLEAN at m_min=0.084, forced to retry → FAIL. Retry converted a correct answer to fabrication. This is the "retry is an intervention" lesson at work: over-triggering introduces harm. τ=0.05 is the safe default.
+
+### Key observations
+
+1. **Fabrication correlates with low margin.** For Qwen-3B on CVE, all fabrication cases had m_min=0.0000. There are no "confident fabrications" — when Qwen fabricates CVEs, it's uncertain. This means CONFIDENT_WRONG doesn't fire for this model+namespace.
+
+2. **CONFIDENT_WRONG is model-specific.** Phi-3 has higher margin (M_median=0.22) yet more fabrication on PyPI/CVE. A confident fabricator would trigger CONFIDENT_WRONG. The path exists for models with different failure geometries.
+
+3. **τ=0.05 is the zero-harm threshold.** At 0.05, only genuinely uncertain prompts (m_min=0.0) get retried, with 0 regressions across both namespaces. At 0.10, the controller starts retrying correct answers and introduces harm.
+
+4. **LOW_MARGIN_RETRY on knowledge boundaries is wasted tokens.** cve-locked-04 retried FAIL→FAIL. The controller correctly detected uncertainty but couldn't fix ignorance. A future refinement: if LOW_MARGIN_RETRY yields FAIL, flag it as knowledge boundary (not actionable by retry).
+
+5. **CVE has 4× more LOW_MARGIN_RETRY triggers than PyPI (40% vs 10%).** Consistent with CVE being structurally harder (lower M_median). The controller's trigger rate is itself a namespace difficulty signal.
