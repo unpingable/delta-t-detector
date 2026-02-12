@@ -143,6 +143,7 @@ SEED_BASE = 42
 
 # Module-level temperature (set from CLI args before experiment runs)
 _temperature = DEFAULT_TEMPERATURE
+_retry_temperature = None  # None = same as _temperature (two-stage: set to 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -155,19 +156,23 @@ def _derive_seed(prompt_id: str, attempt: str) -> int:
     return int(hashlib.sha256(payload.encode()).hexdigest()[:8], 16)
 
 
-def _generate(detector, formatted_prompt: str, seed: int) -> Tuple[str, float]:
+def _generate(detector, formatted_prompt: str, seed: int,
+              temp_override: Optional[float] = None) -> Tuple[str, float]:
     """Generate with fixed seed and return (text, infer_ms).
 
     For temperature=0, uses a small value (0.01) to approximate greedy
     decoding through multinomial sampling (core.py's generate_with_metrics
     doesn't support argmax natively).
+
+    temp_override: if provided, use this instead of _temperature.
     """
     import torch
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
+    temp = temp_override if temp_override is not None else _temperature
     # Use 0.01 as pseudo-greedy (avoids division-by-zero in softmax)
-    effective_temp = _temperature if _temperature > 0 else 0.01
+    effective_temp = temp if temp > 0 else 0.01
     t0 = time.monotonic()
     trace = detector.generate_with_metrics(
         formatted_prompt,
@@ -375,7 +380,9 @@ def run_retry_experiment(
                 retry_template,
             )
             seed2 = _derive_seed(item.id, "attempt2")
-            text2, ms2 = _generate(detector, formatted_retry, seed2)
+            retry_temp = _retry_temperature if _retry_temperature is not None else None
+            text2, ms2 = _generate(detector, formatted_retry, seed2,
+                                   temp_override=retry_temp)
             result2 = score_attempt(
                 detector, text2,
                 item.expected_min_anchors, anchor_type,
@@ -485,6 +492,8 @@ def run_retry_experiment(
         "corpus": corpus_path,
         "model": model_name,
         "temperature": _temperature,
+        "retry_temperature": _retry_temperature if _retry_temperature is not None else _temperature,
+        "policy": "two_stage" if _retry_temperature is not None else "same_temp",
         "n_prompts": len(prompts),
         "counters": counters,
         "intervention_rates": intervention_rates,
@@ -513,7 +522,7 @@ def print_summary(summary: dict):
     print(f"{'='*60}")
     print(f"  Model:   {summary['model']}")
     print(f"  Corpus:  {summary['corpus']}")
-    print(f"  Temp:    {summary.get('temperature', 0.7)}")
+    print(f"  Temp:    {summary.get('temperature', 0.7)} | Retry: {summary.get('retry_temperature', summary.get('temperature', 0.7))} ({summary.get('policy', 'same_temp')})")
     print(f"  Prompts: {c['total']}")
     print()
     print(f"  No retry needed (non-evasion): {c['no_retry_needed']}")
@@ -554,6 +563,9 @@ def main():
                         help="Path to locked corpus JSONL")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Generation temperature (default 0.7, use 0.0 for greedy)")
+    parser.add_argument("--retry-temperature", type=float, default=None,
+                        help="Retry temperature (default: same as --temperature). "
+                             "Use --retry-temperature 0.0 for two-stage policy.")
     parser.add_argument("--quantize", choices=["4bit", "8bit"], default=None,
                         help="Quantization mode (requires bitsandbytes)")
     args = parser.parse_args()
@@ -563,11 +575,15 @@ def main():
     from detector.eval import load_jsonl
 
     # Set module-level temperature before any generation
-    global _temperature
+    global _temperature, _retry_temperature
     _temperature = args.temperature
+    _retry_temperature = args.retry_temperature  # None = same as primary
 
     print(f"Loading model: {args.model}")
-    print(f"Temperature: {_temperature}")
+    policy_label = "two_stage" if _retry_temperature is not None else "same_temp"
+    print(f"Temperature: {_temperature} | Retry temp: "
+          f"{_retry_temperature if _retry_temperature is not None else _temperature} "
+          f"({policy_label})")
     config = DetectorConfig()
     config.device = args.device
     if args.quantize:

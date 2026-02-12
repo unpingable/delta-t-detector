@@ -673,3 +673,60 @@ Same four locked corpora, same protocol. Model: Qwen 2.5 7B-Instruct loaded in N
 5. **Qwen 7B never evades.** Zero evasion across all runs, both temps. This is consistent with the Qwen archetype ("lies to comply") — scale doesn't change the behavioral policy, only the knowledge boundary.
 
 6. **The scale gradient for fabrication.** Fabrication ∝ 1/(memorization × scale). Scale improves memorization coverage, so each scale step shifts more namespaces from "knowledge boundary" to "sampling noise only." The PyPI transition happened at 3B (25% t=0.7 → 0% t=0); the CVE transition happens at 7B (9% t=0.7 → 0F at t=0). DOI likely needs 14B+ to cross the threshold.
+
+---
+
+## Phase 3: Two-Stage Controller Policy
+
+### Design
+
+Three retry policies compared on PyPI locked + CVE locked, across Qwen 3B, Qwen 7B 4-bit, and Phi-3 Mini:
+
+1. **No retry** — baseline (coupling.py)
+2. **Same-temp retry** — retry at operational temp (0.7)
+3. **Two-stage** — primary at temp=0.7, retry at temp=0.0 (greedy)
+
+### Results: Phi-3 Mini 3.8B
+
+**PyPI locked (memorized namespace — evasion is behavioral policy):**
+
+| Policy | Retries | → Clean | → Fail | → Abstain | Harm | Benefit |
+|---|---|---|---|---|---|---|
+| Same temp (0.7) | 3 | 1 | 1 | 1 | 33% | 33% |
+| Two-stage (0.7→0.0) | 3 | **3** | **0** | **0** | **0%** | **100%** |
+
+**CVE locked (unmemorized namespace — knowledge boundary):**
+
+| Policy | Retries | → Clean | → Fail | Harm | Benefit |
+|---|---|---|---|---|---|
+| Same temp (0.7) | 2 | 0 | 2 | 100% | 0% |
+| Two-stage (0.7→0.0) | 2 | 1 | 1 | **50%** | **50%** |
+
+### Results: Qwen 2.5 3B
+
+**PyPI locked:** 0 retries in both policies (Qwen never evades on PyPI). 2F at same-temp first attempt.
+
+**CVE locked:**
+
+| Policy | Retries | → Clean | → Fail | → Persistent evasion | Harm | Benefit |
+|---|---|---|---|---|---|---|
+| Same temp (0.7) | 1 | 0 | 1 | 0 | 100% | 0% |
+| Two-stage (0.7→0.0) | 1 | 0 | 0 | **1** | **0%** | 0% |
+
+Two-stage converts the same-temp harm (WARN→FAIL) to persistent evasion (WARN→WARN). The model deterministically refuses at greedy rather than fabricating.
+
+### Results: Qwen 2.5 7B 4-bit
+
+**Both lanes:** 0 retries in all conditions. Qwen 7B never evades — the controller has nothing to act on. Scale eliminates the evasion that two-stage would address.
+
+### Key observations
+
+1. **Two-stage eliminates all retry harm on memorized namespaces.** Phi-3 PyPI: 33% harm → 0% harm, 33% benefit → 100% benefit. When the model knows the answer and was evading by policy, greedy retry overrides the policy into clean compliance.
+
+2. **Two-stage reduces but cannot eliminate harm on unmemorized namespaces.** Phi-3 CVE: 100% harm → 50% harm. When the model doesn't know, greedy retry still can't fix ignorance. The remaining 50% harm is the irreducible floor set by the knowledge boundary.
+
+3. **Two-stage converts fabrication to persistent evasion for Qwen.** Qwen 3B CVE: WARN→FAIL becomes WARN→WARN. The model's greedy mode for unknown CVEs is refusal, not fabrication. This is strictly safer — persistent evasion is a truthful "I don't know," not a lie.
+
+4. **The controller's value is model- and namespace-dependent.** Maximum value: Phi-3 on memorized namespaces (eliminates all harm). Zero value: Qwen 7B on anything (no evasion to retry). Partial value: any model on unmemorized namespaces.
+
+5. **Scale makes the controller redundant.** At 7B, Qwen produces 0 evasion, so two-stage has nothing to act on. The controller is most valuable at small scale where models evade more and knowledge boundaries are wider. As scale increases, the need for retry-based intervention diminishes.

@@ -11,10 +11,11 @@
 7. Temperature is a lie amplifier: ~50% of measured fabrication is sampling noise
 8. Models show distinct policy fingerprints: "lies to comply" (Qwen) vs "evades; lies when trapped" (Phi-3)
 9. Scale (3B→7B) halves fabrication and closes knowledge boundaries; 4-bit quantization preserves the effect
+10. Two-stage decoding (primary warm, retry greedy) eliminates retry harm on memorized namespaces; scale makes it redundant
 
 ---
 
-**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient.
+**Setup.** We probe three small instruction-tuned models — Qwen 2.5 3B-Instruct (3B), Qwen 2.5 7B-Instruct (7B, NF4 4-bit), and Phi-3 Mini 3.8B-Instruct (3.8B) — for citation fabrication across four identifier namespaces: RFC, CVE, PyPI package versions, and DOI/arXiv. Each namespace has an authoritative existence oracle (rfc-editor.org, MITRE CVE API, PyPI JSON API, doi.org). We use N=2 citation pressure (ask for exactly 2 identifiers) at temperature 0.7 with deterministic seeding. Format-locked variants forbid URLs and enforce identifier-only output. Findings 1-6 report Qwen 3B results; Findings 7-9 compare across models and temperatures; Finding 10 tests the scale gradient; Finding 11 validates the two-stage controller policy.
 
 ## Findings
 
@@ -131,6 +132,19 @@ Running Qwen 2.5 7B-Instruct (NF4 4-bit) on the same locked corpora:
 | CVE | 9% | 6.2% | 5% |
 
 At the prompt level, CVE locked at 7B produces 0 FAILs at greedy — the knowledge boundary that persisted at 3B (1 FAIL at temp=0) is closed. Scale shifts namespaces from "knowledge boundary" to "sampling noise only." PyPI crossed this threshold at 3B; CVE crosses at 7B. The implication: fabrication ∝ 1/(memorization × scale), and each model size has a namespace-specific crossover point where greedy decoding eliminates fabrication entirely. 4-bit quantization preserves this effect — NF4 does not reintroduce knowledge-boundary fabrication.
+
+### 11. Two-stage decoding eliminates retry harm on memorized namespaces
+
+Comparing three retry policies (no retry, same-temp retry at 0.7, two-stage with retry at 0.0):
+
+| Model | Lane | Same-temp harm | Two-stage harm | Two-stage benefit |
+|---|---|---|---|---|
+| Phi-3 | PyPI (memorized) | 33% | **0%** | **100%** |
+| Phi-3 | CVE (unmemorized) | 100% | 50% | 50% |
+| Qwen 3B | CVE | 100% | **0%** (→ persistent evasion) | 0% |
+| Qwen 7B | both | — (0 retries) | — (0 retries) | — |
+
+Two-stage eliminates all retry harm when the model knows the answer (memorized namespace + behavioral evasion). On unmemorized namespaces, harm drops but persists — greedy can't fix ignorance. For Qwen, two-stage converts WARN→FAIL to persistent evasion (WARN→WARN), which is strictly safer. At 7B scale, the controller becomes redundant — no evasion means nothing to retry.
 
 ## Design Rules
 
