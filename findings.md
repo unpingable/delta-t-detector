@@ -1058,4 +1058,16 @@ The model knows OAuth section structure (RFC 6749 §4 is indeed about authorizat
 
 Each level catches fabrication invisible to the level above. Level 1 catches fabricated identifiers. Level 2 catches "real but irrelevant" citations. Level 3 catches "right document, wrong address."
 
-Section integrity only runs inside grounding (when fork_risk < τ), so it's selective — only prompts the margin signal flags as uncertain get the expensive per-section fetch. For the 3 FAST_PATH prompts (fork_risk > 0.05), section integrity was not checked — the model was confident and the oracle passed, so we trust it. This is the right cost/coverage tradeoff for a runtime controller.
+**FAST_PATH gap closed**: Address fabrication is a confident-wrong failure — margin doesn't flag it because the model isn't uncertain, it's just wrong about intra-document structure. Persistent file cache (`.cache/rfc_sections/`, ~2KB per RFC JSON) makes section integrity cheap enough to run on every prompt that contains section refs, regardless of margin. Results with always-on section integrity:
+
+| Prompt | Policy | Prev Verdict | New Verdict | Failure |
+|--------|--------|-------------|-------------|---------|
+| rfc-int-01 (HTTP/2) | FAST_PATH | CLEAN | **WARN** | RFC 7541 §5.3 no_such_section |
+| rfc-int-02 (TLS) | FAST_PATH | CLEAN | **WARN** | RFC 8446 §4.2.1 wrong_section ("Supported Versions") |
+| rfc-int-03 (DNS) | FAST_PATH | CLEAN | **WARN** | RFC 1035 §4 + RFC 7838 §3.4 both no_such_section |
+| rfc-int-04 (OAuth) | GROUNDED | CLEAN | CLEAN | RFC 6749 §4 verified |
+| rfc-int-05 (WebSocket) | LOW_MARGIN_RETRY | CLEAN | CLEAN | Handled by grounding demotion |
+
+Three previously-invisible cases of address fabrication now caught. The model confidently cited real RFCs with fabricated section numbers. The override is CLEAN → WARN (warn_type=SECTION_INTEGRITY_FAILURE), not FAIL — existence passed, but the address is wrong.
+
+Key insight: **margin-only gating won't catch this class.** Address fabrication has high margin because the model isn't at an entropy fork — it's confidently encoding memorized RFC numbers with fabricated section numbers. The section integrity oracle is the right tool, and caching makes the cost negligible.

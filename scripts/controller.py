@@ -357,8 +357,9 @@ _RFC_SECTION_REF_PAT = re.compile(
     re.IGNORECASE,
 )
 
-# Per-session cache: rfc_number → {section_num: title}
-_rfc_section_cache: Dict[str, Dict[str, str]] = {}
+# Two-layer cache: in-memory (session) + persistent file (.cache/rfc_sections/)
+_rfc_section_cache: Dict[str, Optional[Dict[str, str]]] = {}
+_RFC_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "rfc_sections"
 
 
 def _parse_rfc_sections(text: str) -> Dict[str, str]:
@@ -370,10 +371,28 @@ def _parse_rfc_sections(text: str) -> Dict[str, str]:
 
 
 def _fetch_rfc_sections(rfc_number: str) -> Optional[Dict[str, str]]:
-    """Fetch RFC text and return parsed section map. Cached per session."""
+    """Fetch RFC text and return parsed section map.
+
+    Two-layer cache:
+    1. In-memory dict (fast, per-session)
+    2. Persistent JSON file in .cache/rfc_sections/ (amortized across runs)
+    Falls back to HTTP fetch if both miss.
+    """
+    # Layer 1: in-memory
     if rfc_number in _rfc_section_cache:
         return _rfc_section_cache[rfc_number]
 
+    # Layer 2: persistent file cache
+    cache_file = _RFC_CACHE_DIR / f"{rfc_number}.json"
+    if cache_file.exists():
+        try:
+            sections = json.loads(cache_file.read_text())
+            _rfc_section_cache[rfc_number] = sections
+            return sections
+        except Exception:
+            pass  # corrupt cache file, re-fetch
+
+    # Layer 3: HTTP fetch
     import requests as _requests
     try:
         resp = _requests.get(
@@ -386,6 +405,12 @@ def _fetch_rfc_sections(rfc_number: str) -> Optional[Dict[str, str]]:
             return None
         sections = _parse_rfc_sections(resp.text)
         _rfc_section_cache[rfc_number] = sections
+        # Persist to file cache
+        try:
+            _RFC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(sections))
+        except Exception:
+            pass  # non-fatal: cache write failure doesn't block
         return sections
     except Exception:
         return None
@@ -900,6 +925,27 @@ def run_prompt(
         final_result = result1
         final_text = text1
 
+    # --- Post-policy: standalone section integrity gate ---
+    # If RFC section refs are in the output and grounding didn't already run
+    # section integrity, check now. Cached section maps make this cheap.
+    section_integrity = None
+    if grounding is None or "section_integrity" not in grounding:
+        section_refs = _extract_section_refs(final_text)
+        if section_refs:
+            section_integrity = check_rfc_section_integrity(
+                final_text, user_prompt,
+                relevance_fn=detector.epistemic_grounding_test.check_citation_relevance,
+            )
+            if section_integrity is not None:
+                n_bad = (section_integrity["n_wrong_section"]
+                         + section_integrity["n_no_such_section"])
+                if n_bad > 0 and final_result["verdict"] == "CLEAN":
+                    # Address fabrication: existence passed, section is wrong.
+                    # Override verdict to WARN — don't fast-path fabricated addresses.
+                    final_result = dict(final_result)
+                    final_result["verdict"] = "WARN"
+                    final_result["warn_type"] = "SECTION_INTEGRITY_FAILURE"
+
     # --- Build record ---
     record = {
         "prompt_id": prompt_id,
@@ -941,6 +987,10 @@ def run_prompt(
         }
         record["retry_gain"] = retry_gain
         record["retry_regression"] = retry_regression
+
+    # Standalone section integrity (ran outside grounding)
+    if section_integrity is not None:
+        record["section_integrity"] = section_integrity
 
     return record, final_result, final_text
 

@@ -29,6 +29,7 @@ baselines/
 runs/
 logs/
 reports/
+.cache/
 *.tar.gz
 .resolver_cache.json
 data/ablation_*.csv
