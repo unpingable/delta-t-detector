@@ -673,10 +673,13 @@ def main():
                         help="Quantization mode (requires bitsandbytes)")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Generation temperature (default 0.7, use 0.0 for greedy)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Base seed for deterministic generation (default 42)")
     args = parser.parse_args()
 
-    global TEMPERATURE
+    global TEMPERATURE, SEED_BASE
     TEMPERATURE = args.temperature if args.temperature > 0 else 0.01  # pseudo-greedy
+    SEED_BASE = args.seed
 
     # Load model once
     from detector.core import DeltaTDetector

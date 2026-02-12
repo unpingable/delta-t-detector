@@ -494,6 +494,7 @@ def run_retry_experiment(
         "temperature": _temperature,
         "retry_temperature": _retry_temperature if _retry_temperature is not None else _temperature,
         "policy": "two_stage" if _retry_temperature is not None else "same_temp",
+        "seed": SEED_BASE,
         "n_prompts": len(prompts),
         "counters": counters,
         "intervention_rates": intervention_rates,
@@ -568,16 +569,19 @@ def main():
                              "Use --retry-temperature 0.0 for two-stage policy.")
     parser.add_argument("--quantize", choices=["4bit", "8bit"], default=None,
                         help="Quantization mode (requires bitsandbytes)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Base seed for deterministic generation (default 42)")
     args = parser.parse_args()
 
     from detector.core import DeltaTDetector
     from detector.config import DetectorConfig
     from detector.eval import load_jsonl
 
-    # Set module-level temperature before any generation
-    global _temperature, _retry_temperature
+    # Set module-level temperature and seed before any generation
+    global _temperature, _retry_temperature, SEED_BASE
     _temperature = args.temperature
     _retry_temperature = args.retry_temperature  # None = same as primary
+    SEED_BASE = args.seed
 
     print(f"Loading model: {args.model}")
     policy_label = "two_stage" if _retry_temperature is not None else "same_temp"
