@@ -2,7 +2,7 @@
 
 ## Key Findings
 
-**Setup**: Qwen 2.5 3B-Instruct + Phi-3 Mini 3.8B-Instruct, temperature 0.7, N=2 citation pressure, four namespaces with authoritative validators. All Qwen measurements replicated across Linux (crow) and macOS (Mac mini ARM64) — resolver behavior is platform-invariant for authoritative APIs.
+**Setup**: Qwen 2.5 3B-Instruct + Phi-3 Mini 3.8B-Instruct, temperature 0.7, N=2 citation pressure, four namespaces with authoritative validators. All Qwen measurements replicated across Linux (RTX 5060 Ti 16GB, Ubuntu) and macOS (Mac mini M-series ARM64, "Servo") — resolver behavior is platform-invariant for authoritative APIs. The full namespace spectrum, coupling topology decomposition, margin analysis, and runtime controller run on a single consumer 16GB GPU.
 
 **1. Fabrication is namespace-dependent, not model-global.**
 
@@ -917,3 +917,5 @@ But introduces **1 regression**: cve-locked-09 was CLEAN at m_min=0.084, forced 
 4. **LOW_MARGIN_RETRY on knowledge boundaries is wasted tokens.** cve-locked-04 retried FAIL→FAIL. The controller correctly detected uncertainty but couldn't fix ignorance. A future refinement: if LOW_MARGIN_RETRY yields FAIL, flag it as knowledge boundary (not actionable by retry).
 
 5. **CVE has 4× more LOW_MARGIN_RETRY triggers than PyPI (40% vs 10%).** Consistent with CVE being structurally harder (lower M_median). The controller's trigger rate is itself a namespace difficulty signal.
+
+6. **Margin isn't a truth signal; it's a control signal for when interventions are least likely to cause harm.** That's what τ=0.05 proved: the threshold where retry helps the uncertain without harming the correct.
