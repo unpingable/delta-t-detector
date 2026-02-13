@@ -183,11 +183,15 @@ delta-t-detector/
 
 ## Research lineage
 
-This project originated as a Δt (temporal coherence) exploration of LLM commitment dynamics. The original framing is documented in:
+This repo is the companion code for three papers:
 
-> Beck, J. (2025). "You Need More Than Just Attention: Invariant Requirements for Temporal Coherence in AI Systems." [Zenodo DOI: 10.5281/zenodo.14629919](https://zenodo.org/records/18039927)
+> Beck, J. (2025). "You Need More Than Just Attention: Invariant Requirements for Temporal Coherence in AI Systems." [DOI: 10.5281/zenodo.18039926](https://zenodo.org/records/18039927)
 
-The codebase has since evolved to focus on epistemic grounding, citation validation, and multi-topology evaluation. Temporal coherence remains as one invariant among four.
+> Beck, J. (2025). "Detecting Temporal Debt in Language Models and Software Systems: Applications of Δt-Constrained Inference." [DOI: 10.5281/zenodo.17859323](https://zenodo.org/records/17859324)
+
+> Beck, J. (2026). "Cybernetic Fault Domains: When Commitment Outruns Verification." Section 3.2. [DOI: 10.5281/zenodo.18518894](https://zenodo.org/records/18518895)
+
+Paper #10 (Invariant Requirements) defines the four invariants the detector tests. Paper #08 (Detecting Temporal Debt) covers the hallucination detection domain and Δt diagnostic. Paper #15 (Cybernetic Fault Domains) provides the CFDD framework where §3.2 instantiates this detector.
 
 ## License
 
@@ -195,5 +199,8 @@ Apache 2.0
 
 ## Links
 
-- [Paper: You Need More Than Just Attention (Zenodo)](https://zenodo.org/records/18039927)
+- [Paper: Invariant Requirements for Temporal Coherence (Zenodo)](https://zenodo.org/records/18039927)
+- [Paper: Detecting Temporal Debt (Zenodo)](https://zenodo.org/records/17859324)
+- [Paper: Cybernetic Fault Domains (Zenodo)](https://zenodo.org/records/18518895)
+- [Companion repo: scalar-reward-collapse](https://github.com/unpingable/scalar-reward-collapse)
 - [Substack: The Neutral Zone](https://neutralzone.substack.com/)
