@@ -1077,6 +1077,14 @@ def main():
                         help="Quantization mode (requires bitsandbytes)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Base seed (default 42)")
+    parser.add_argument("--emit-decisions", action="store_true",
+                        help="Emit controller_decision/v1 JSON per task")
+    parser.add_argument("--request-nonce", default=None,
+                        help="Governor-provided nonce for freshness binding")
+    parser.add_argument("--oracle-profile", default=None,
+                        help="Oracle profile ID (e.g. pypi_locked)")
+    parser.add_argument("--decision-ttl-ms", type=int, default=None,
+                        help="Decision TTL in ms (governor-configured)")
     args = parser.parse_args()
 
     # Set module-level defaults
@@ -1091,6 +1099,7 @@ def main():
     from detector.config import DetectorConfig
     from detector.eval import load_jsonl
     from detector.run_store import store_run, PredictionRecord, _utcnow_iso
+    from detector.decision_writer import build_controller_decision, write_decision
 
     print(f"3-Way Controller | tau={TAU} | temp={args.temperature} | retry_temp={RETRY_TEMPERATURE}")
     print(f"Loading model: {args.model}")
@@ -1142,6 +1151,27 @@ def main():
         # Print inline status
         fork_str = f"m_min={record['fork_risk']:.4f}" if record['fork_risk'] is not None else "no_windows"
         print(f"→ {record['policy']} ({fork_str}) → {record['final_verdict']}")
+
+        # Emit controller_decision/v1 JSON (write-only, no behavior change)
+        if args.emit_decisions:
+            try:
+                cd = build_controller_decision(
+                    record=record,
+                    final_text=final_text,
+                    final_result=final_result,
+                    model_id=args.model,
+                    task_id=item.id,
+                    task_class="citation",
+                    namespace=item.expected_anchor_type or "pypi",
+                    prompt_text=item.prompt,
+                    request_nonce=args.request_nonce,
+                    oracle_profile=args.oracle_profile,
+                    decision_ttl_ms=args.decision_ttl_ms,
+                )
+                decisions_dir = Path("data") / "decisions" / run_id
+                write_decision(cd, decisions_dir, task_id=item.id)
+            except Exception as e:
+                print(f"  [WARN] decision_writer: {e}")
 
         # Build PredictionRecord for store_run
         eg = final_result["eg"]
@@ -1229,6 +1259,11 @@ def main():
     with open(report_path, "w") as f:
         json.dump(summary, f, indent=2, default=str)
     print(f"\n  Report: {report_path}")
+
+    if args.emit_decisions:
+        decisions_dir = Path("data") / "decisions" / run_id
+        n_files = len(list(decisions_dir.glob("*.json"))) if decisions_dir.exists() else 0
+        print(f"  Decisions: {decisions_dir} ({n_files} files)")
 
 
 if __name__ == "__main__":
