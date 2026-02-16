@@ -18,6 +18,8 @@ Each run produces an auditable bundle (flight recorder + per-step artifacts + re
 
 LLMs can produce *plausible lies* that are syntactically valid and only falsifiable via external verification. This harness **manufactures checkability** (e.g., citation-forcing lanes) and uses resolvers + receipts to distinguish compliance, evasion, and fabrication. It does not certify truth — it measures specific, falsifiable failure classes.
 
+The detector is also a leverage-mode correlator (Paper 16): it extracts discriminating power from the temporal baseline between fast LLM inference and slow evidence verification. The mismatch the detector measures is the same mismatch it exploits — confidence arrives in milliseconds, resolver evidence in seconds, and the gap between them is the instrument's aperture.
+
 ## How it works
 
 1. **Lanes / corpora** define prompts with expected constraints (canary, ladder, N-pressure, coupling)
@@ -191,7 +193,9 @@ This repo is the companion code for three papers:
 
 > Beck, J. (2026). "Cybernetic Fault Domains: When Commitment Outruns Verification." Section 3.2. [DOI: 10.5281/zenodo.18518894](https://zenodo.org/records/18518895)
 
-Paper #10 (Invariant Requirements) defines the four invariants the detector tests. Paper #08 (Detecting Temporal Debt) covers the hallucination detection domain and Δt diagnostic. Paper #15 (Cybernetic Fault Domains) provides the CFDD framework where §3.2 instantiates this detector.
+> Beck, J. (2026). "The Gain Geometry of Temporal Mismatch: Shear, Leverage, and Capture in Multi-Timescale Systems." Preprint, Δt Framework Paper 16.
+
+Paper #10 (Invariant Requirements) defines the four invariants the detector tests. Paper #08 (Detecting Temporal Debt) covers the hallucination detection domain and Δt diagnostic. Paper #15 (Cybernetic Fault Domains) provides the CFDD framework where §3.2 instantiates this detector. Paper #16 (Gain Geometry) identifies the detector as a leverage-mode correlator that extracts resolution from the temporal baseline between inference speed and evidence speed.
 
 ## License
 
