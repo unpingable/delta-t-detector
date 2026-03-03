@@ -1,0 +1,65 @@
+{
+  "_vector_meta": {
+    "description": "ORACLE_ERROR: oracle failed to execute. Default block (fail-closed).",
+    "expected_verdict": "block",
+    "expected_nonce": "governor-nonce-005",
+    "output_text": "ANSWER: Use doi:10.1234/fake for the reference.\nREFS:\n1. doi:10.1234/fake"
+  },
+  "decision": {
+    "schema": "controller_decision/v1",
+    "task": {
+      "task_id": "vec-oracle-error-001",
+      "task_class": "citation",
+      "namespace": "doi",
+      "prompt_hash": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d",
+      "output_hash": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+      "request_nonce": "governor-nonce-005",
+      "oracle_profile": "doi_locked"
+    },
+    "local_model": {
+      "model_id": "Qwen/Qwen2.5-3B-Instruct",
+      "quant": "none",
+      "decoding": {
+        "temperature": 0.7,
+        "retry_temperature": 0.0,
+        "seed": 42
+      },
+      "controller_version": "1.0"
+    },
+    "decision": {
+      "fork_risk": {
+        "metric": "prompt_min_margin",
+        "value_milliunits": 80,
+        "window_k": 2
+      },
+      "tau_milliunits": 50,
+      "controller_action": "STOP",
+      "final_status": "ORACLE_ERROR",
+      "decision_ttl_ms": 30000,
+      "handoff_recommendation": "ESCALATE_MODEL"
+    },
+    "evidence": {
+      "candidates": ["doi:10.1234/fake"],
+      "oracle_checks": [
+        {
+          "oracle": "doi_validator",
+          "query": "10.1234/fake",
+          "result": "ERROR",
+          "error_kind": "NETWORK",
+          "error": "Connection timeout to doi.org",
+          "latency_ms": 5000
+        }
+      ],
+      "failures": [],
+      "controller_trace_ref": "data/runs/test/details.jsonl"
+    },
+    "economics": {
+      "local_tokens_spent": 220,
+      "retry_tokens_spent": 0,
+      "retry_count": 0,
+      "latency_ms": 6200,
+      "oracle_latency_ms": 5000
+    },
+    "created_at": "2026-02-12T12:04:00+00:00"
+  }
+}

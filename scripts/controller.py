@@ -34,6 +34,42 @@ RETRY_TEMPERATURE = 0.0  # greedy retry
 SEED_BASE = 42
 TAU = 0.05
 
+
+# ---------------------------------------------------------------------------
+# Per-(model_family, namespace) τ calibration
+# ---------------------------------------------------------------------------
+
+def _classify_model_family(model_id: str) -> str:
+    """Classify a HuggingFace model ID into a tau-table family key."""
+    if "3B" in model_id and "Qwen" in model_id:
+        return "qwen3b"
+    if "7B" in model_id and "Qwen" in model_id:
+        return "qwen7b"
+    if "Phi-3" in model_id or "phi-3" in model_id:
+        return "phi3"
+    return "unknown"
+
+
+def load_tau_table(path: str) -> dict:
+    """Load a tau calibration table from JSON file.
+
+    Returns the parsed dict with keys: version, default_tau, entries.
+    """
+    with open(path) as f:
+        return json.load(f)
+
+
+def lookup_tau(tau_table: dict, model_id: str, namespace: str) -> float:
+    """Look up per-(model_family, namespace) tau from calibration table.
+
+    Falls back to default_tau if model_family or namespace not found.
+    """
+    family = _classify_model_family(model_id)
+    default = tau_table.get("default_tau", 0.05)
+    entries = tau_table.get("entries", {})
+    family_entry = entries.get(family, {})
+    return family_entry.get(namespace, default)
+
 ROLE_SINGLE = """\
 You are a factual research assistant. Answer the user's question accurately.
 You MUST structure your response EXACTLY as follows:
@@ -1067,8 +1103,10 @@ def main():
     parser.add_argument("--device", default="auto")
     parser.add_argument("--corpus", required=True,
                         help="Path to locked corpus JSONL")
-    parser.add_argument("--tau", type=float, default=0.05,
-                        help="Fork risk threshold (default 0.05)")
+    parser.add_argument("--tau", type=float, default=None,
+                        help="Global fork risk threshold override (default 0.05)")
+    parser.add_argument("--tau-table", default=None,
+                        help="Path to per-(model_family, namespace) tau calibration JSON")
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Operational temperature (default 0.7)")
     parser.add_argument("--retry-temperature", type=float, default=0.0,
@@ -1092,7 +1130,12 @@ def main():
     DEFAULT_TEMPERATURE = args.temperature if args.temperature > 0 else 0.01
     RETRY_TEMPERATURE = args.retry_temperature
     SEED_BASE = args.seed
-    TAU = args.tau
+    TAU = args.tau if args.tau is not None else 0.05
+
+    # Load tau table (if provided and --tau not overriding)
+    tau_table = None
+    if args.tau_table and args.tau is None:
+        tau_table = load_tau_table(args.tau_table)
 
     # Load model
     from detector.core import DeltaTDetector
@@ -1101,7 +1144,8 @@ def main():
     from detector.run_store import store_run, PredictionRecord, _utcnow_iso
     from detector.decision_writer import build_controller_decision, write_decision
 
-    print(f"3-Way Controller | tau={TAU} | temp={args.temperature} | retry_temp={RETRY_TEMPERATURE}")
+    tau_src = "tau-table" if tau_table else ("--tau" if args.tau is not None else "default")
+    print(f"3-Way Controller | tau={TAU} ({tau_src}) | temp={args.temperature} | retry_temp={RETRY_TEMPERATURE}")
     print(f"Loading model: {args.model}")
     if args.quantize:
         print(f"Quantization: {args.quantize}")
@@ -1134,8 +1178,14 @@ def main():
     for i, item in enumerate(prompts):
         print(f"  [{i+1}/{len(prompts)}] {item.id}", end=" ", flush=True)
 
+        # Per-prompt tau: --tau (global override) > --tau-table lookup > hardcoded
+        prompt_tau = TAU
+        if tau_table is not None:
+            ns = item.expected_anchor_type or "pypi"
+            prompt_tau = lookup_tau(tau_table, args.model, ns)
+
         record, final_result, final_text = run_prompt(
-            detector, item, TAU, RETRY_TEMPERATURE, run_id
+            detector, item, prompt_tau, RETRY_TEMPERATURE, run_id
         )
 
         records.append(record)

@@ -1,0 +1,70 @@
+{
+  "_vector_meta": {
+    "description": "CONFIDENT_WRONG: high margin but oracle says fabricated. Should block.",
+    "expected_verdict": "block",
+    "expected_nonce": "governor-nonce-003",
+    "output_text": "ANSWER: Use flask-quantum for quantum computing.\nREFS:\n1. pypi:flask-quantum==1.0.0"
+  },
+  "decision": {
+    "schema": "controller_decision/v1",
+    "task": {
+      "task_id": "vec-confident-wrong-001",
+      "task_class": "citation",
+      "namespace": "pypi",
+      "prompt_hash": "c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a",
+      "output_hash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+      "request_nonce": "governor-nonce-003",
+      "oracle_profile": "pypi_locked"
+    },
+    "local_model": {
+      "model_id": "Qwen/Qwen2.5-3B-Instruct",
+      "quant": "none",
+      "decoding": {
+        "temperature": 0.7,
+        "retry_temperature": 0.0,
+        "seed": 42
+      },
+      "controller_version": "1.0"
+    },
+    "decision": {
+      "fork_risk": {
+        "metric": "prompt_min_margin",
+        "value_milliunits": 150,
+        "window_k": 2
+      },
+      "tau_milliunits": 50,
+      "controller_action": "STOP",
+      "final_status": "CONFIDENT_WRONG",
+      "decision_ttl_ms": 30000,
+      "handoff_recommendation": "ESCALATE_REMOTE"
+    },
+    "evidence": {
+      "candidates": ["pypi:flask-quantum==1.0.0"],
+      "oracle_checks": [
+        {
+          "oracle": "pypi_validator",
+          "query": "flask-quantum==1.0.0",
+          "result": "FAIL",
+          "failure_kind": "NOT_FOUND",
+          "latency_ms": 112
+        }
+      ],
+      "failures": [
+        {
+          "kind": "NOT_FOUND",
+          "message": "fabricated: flask-quantum==1.0.0",
+          "attempt": 1
+        }
+      ],
+      "controller_trace_ref": "data/runs/test/details.jsonl"
+    },
+    "economics": {
+      "local_tokens_spent": 200,
+      "retry_tokens_spent": 0,
+      "retry_count": 0,
+      "latency_ms": 1100,
+      "oracle_latency_ms": 112
+    },
+    "created_at": "2026-02-12T12:02:00+00:00"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "_vector_meta": {
+    "description": "LOW_MARGIN_RETRY that recovered: retried at greedy, oracle now passes",
+    "expected_verdict": "pass",
+    "expected_nonce": "governor-nonce-002",
+    "output_text": "ANSWER: Flask is a web framework.\nREFS:\n1. pypi:flask==3.0.0"
+  },
+  "decision": {
+    "schema": "controller_decision/v1",
+    "task": {
+      "task_id": "vec-recovered-001",
+      "task_class": "citation",
+      "namespace": "pypi",
+      "prompt_hash": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+      "output_hash": "6d9e2c8f3a1b4e5d7c8a9b0e1f2d3c4a5b6e7f8091a2b3c4d5e6f70819293840",
+      "request_nonce": "governor-nonce-002",
+      "oracle_profile": "pypi_locked"
+    },
+    "local_model": {
+      "model_id": "Qwen/Qwen2.5-3B-Instruct",
+      "quant": "none",
+      "decoding": {
+        "temperature": 0.7,
+        "retry_temperature": 0.0,
+        "seed": 42
+      },
+      "controller_version": "1.0"
+    },
+    "decision": {
+      "fork_risk": {
+        "metric": "prompt_min_margin",
+        "value_milliunits": 30,
+        "window_k": 2
+      },
+      "tau_milliunits": 50,
+      "controller_action": "LOW_MARGIN_RETRY",
+      "final_status": "LOW_MARGIN_RECOVERED",
+      "decision_ttl_ms": 30000,
+      "handoff_recommendation": "NONE"
+    },
+    "evidence": {
+      "candidates": ["pypi:flask==3.0.0"],
+      "oracle_checks": [
+        {
+          "oracle": "pypi_validator",
+          "query": "flask==3.0.0",
+          "result": "PASS",
+          "latency_ms": 98
+        }
+      ],
+      "failures": [],
+      "controller_trace_ref": "data/runs/test/details.jsonl"
+    },
+    "economics": {
+      "local_tokens_spent": 360,
+      "retry_tokens_spent": 180,
+      "retry_count": 1,
+      "latency_ms": 2400,
+      "oracle_latency_ms": 98
+    },
+    "created_at": "2026-02-12T12:01:00+00:00"
+  }
+}

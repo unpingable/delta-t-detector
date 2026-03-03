@@ -1,0 +1,63 @@
+{
+  "_vector_meta": {
+    "description": "Happy path: FAST_PATH with CLEAN oracle, high margin",
+    "expected_verdict": "pass",
+    "expected_nonce": "governor-nonce-001",
+    "output_text": "ANSWER: requests is a Python HTTP library.\nREFS:\n1. pypi:requests==2.31.0"
+  },
+  "decision": {
+    "schema": "controller_decision/v1",
+    "task": {
+      "task_id": "vec-clean-001",
+      "task_class": "citation",
+      "namespace": "pypi",
+      "prompt_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_hash": "a3f7b4c23d1e9608fadb0c3bb2de6a0ef5bcb5c25e19e8c8b35da7f84e13a3a5",
+      "request_nonce": "governor-nonce-001",
+      "oracle_profile": "pypi_locked"
+    },
+    "local_model": {
+      "model_id": "Qwen/Qwen2.5-3B-Instruct",
+      "quant": "none",
+      "decoding": {
+        "temperature": 0.7,
+        "retry_temperature": 0.0,
+        "seed": 42
+      },
+      "controller_version": "1.0"
+    },
+    "decision": {
+      "fork_risk": {
+        "metric": "prompt_min_margin",
+        "value_milliunits": 120,
+        "window_k": 3
+      },
+      "tau_milliunits": 50,
+      "controller_action": "FAST_PATH",
+      "final_status": "CLEAN",
+      "decision_ttl_ms": 30000,
+      "handoff_recommendation": "NONE"
+    },
+    "evidence": {
+      "candidates": ["pypi:requests==2.31.0"],
+      "oracle_checks": [
+        {
+          "oracle": "pypi_validator",
+          "query": "requests==2.31.0",
+          "result": "PASS",
+          "latency_ms": 142
+        }
+      ],
+      "failures": [],
+      "controller_trace_ref": "data/runs/test/details.jsonl"
+    },
+    "economics": {
+      "local_tokens_spent": 180,
+      "retry_tokens_spent": 0,
+      "retry_count": 0,
+      "latency_ms": 1200,
+      "oracle_latency_ms": 142
+    },
+    "created_at": "2026-02-12T12:00:00+00:00"
+  }
+}

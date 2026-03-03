@@ -1,0 +1,19 @@
+{
+  "_comment": "Per-(model_family, namespace) tau values. Fallback: 0.05",
+  "version": "1",
+  "default_tau": 0.05,
+  "entries": {
+    "qwen3b": {
+      "pypi": 0.05,
+      "cve": 0.05
+    },
+    "qwen7b": {
+      "pypi": 0.05,
+      "cve": 0.05
+    },
+    "phi3": {
+      "pypi": 0.05,
+      "cve": 0.05
+    }
+  }
+}

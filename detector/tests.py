@@ -2156,6 +2156,269 @@ class TestCouplingTopology:
 
 
 # ============================================================================
+# Controller Decision Schema Tests
+# ============================================================================
+
+class TestControllerDecisionSchema:
+    """Tests for controller_decision/v1 schema and vector validation"""
+
+    SCHEMA_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'schema', 'controller_decision.v1.schema.json'
+    )
+    VECTORS_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'vectors', 'controller_decision', 'v1'
+    )
+
+    REQUIRED_TOP_LEVEL = {"schema", "task", "local_model", "decision", "evidence", "economics", "created_at"}
+    REQUIRED_TASK = {"task_id", "task_class", "namespace", "prompt_hash", "output_hash"}
+    REQUIRED_LOCAL_MODEL = {"model_id", "quant", "decoding", "controller_version"}
+    REQUIRED_DECODING = {"temperature", "retry_temperature", "seed"}
+    REQUIRED_DECISION = {"fork_risk", "tau_milliunits", "controller_action", "final_status", "handoff_recommendation"}
+    REQUIRED_FORK_RISK = {"metric", "value_milliunits", "window_k"}
+    REQUIRED_EVIDENCE = {"candidates", "oracle_checks", "failures"}
+    REQUIRED_ECONOMICS = {"local_tokens_spent", "retry_tokens_spent", "retry_count", "latency_ms", "oracle_latency_ms"}
+
+    VALID_CONTROLLER_ACTIONS = {"FAST_PATH", "LOW_MARGIN_RETRY", "STOP"}
+    VALID_FINAL_STATUSES = {"CLEAN", "LOW_MARGIN_RECOVERED", "CONFIDENT_WRONG", "KNOWLEDGE_BOUNDARY", "ORACLE_ERROR"}
+    VALID_HANDOFF = {"NONE", "ESCALATE_REMOTE", "ESCALATE_MODEL"}
+    VALID_ORACLE_RESULTS = {"PASS", "FAIL", "ERROR"}
+    VALID_FAILURE_KINDS = {"NOT_FOUND", "MALFORMED"}
+
+    def test_controller_decision_schema_file_exists(self):
+        """Controller decision schema file should exist"""
+        assert os.path.exists(self.SCHEMA_PATH), f"Missing {self.SCHEMA_PATH}"
+
+    def test_controller_decision_schema_is_valid_json(self):
+        """Schema file should be valid JSON"""
+        with open(self.SCHEMA_PATH) as f:
+            schema = json.load(f)
+        assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+        assert schema["$id"] == "controller_decision.v1.schema.json"
+
+    def test_controller_decision_schema_has_required_fields(self):
+        """Schema should declare the expected required fields"""
+        with open(self.SCHEMA_PATH) as f:
+            schema = json.load(f)
+        assert set(schema["required"]) == self.REQUIRED_TOP_LEVEL
+
+    def _load_vectors(self):
+        """Load all vector files and extract decision payloads."""
+        vectors = []
+        for fname in sorted(os.listdir(self.VECTORS_DIR)):
+            if not fname.endswith('.json'):
+                continue
+            path = os.path.join(self.VECTORS_DIR, fname)
+            with open(path) as f:
+                raw = json.load(f)
+            vectors.append((fname, raw["decision"]))
+        return vectors
+
+    def test_controller_decision_vectors_exist(self):
+        """At least 7 test vectors should exist"""
+        vectors = self._load_vectors()
+        assert len(vectors) >= 7
+
+    def test_controller_decision_vectors_top_level_keys(self):
+        """Each vector decision payload should have all required top-level keys"""
+        for fname, decision in self._load_vectors():
+            missing = self.REQUIRED_TOP_LEVEL - set(decision.keys())
+            assert not missing, f"{fname}: missing top-level keys {missing}"
+
+    def test_controller_decision_vectors_task_keys(self):
+        """Each vector should have required task keys"""
+        for fname, decision in self._load_vectors():
+            missing = self.REQUIRED_TASK - set(decision["task"].keys())
+            assert not missing, f"{fname}: missing task keys {missing}"
+
+    def test_controller_decision_vectors_local_model_keys(self):
+        """Each vector should have required local_model keys"""
+        for fname, decision in self._load_vectors():
+            missing = self.REQUIRED_LOCAL_MODEL - set(decision["local_model"].keys())
+            assert not missing, f"{fname}: missing local_model keys {missing}"
+
+    def test_controller_decision_vectors_decoding_keys(self):
+        """Each vector should have required decoding keys"""
+        for fname, decision in self._load_vectors():
+            decoding = decision["local_model"]["decoding"]
+            missing = self.REQUIRED_DECODING - set(decoding.keys())
+            assert not missing, f"{fname}: missing decoding keys {missing}"
+
+    def test_controller_decision_vectors_decision_keys(self):
+        """Each vector should have required decision keys"""
+        for fname, decision in self._load_vectors():
+            missing = self.REQUIRED_DECISION - set(decision["decision"].keys())
+            assert not missing, f"{fname}: missing decision keys {missing}"
+
+    def test_controller_decision_vectors_fork_risk_keys(self):
+        """Each vector should have required fork_risk keys"""
+        for fname, decision in self._load_vectors():
+            fr = decision["decision"]["fork_risk"]
+            missing = self.REQUIRED_FORK_RISK - set(fr.keys())
+            assert not missing, f"{fname}: missing fork_risk keys {missing}"
+
+    def test_controller_decision_vectors_evidence_keys(self):
+        """Each vector should have required evidence keys"""
+        for fname, decision in self._load_vectors():
+            missing = self.REQUIRED_EVIDENCE - set(decision["evidence"].keys())
+            assert not missing, f"{fname}: missing evidence keys {missing}"
+
+    def test_controller_decision_vectors_economics_keys(self):
+        """Each vector should have required economics keys"""
+        for fname, decision in self._load_vectors():
+            missing = self.REQUIRED_ECONOMICS - set(decision["economics"].keys())
+            assert not missing, f"{fname}: missing economics keys {missing}"
+
+    def test_controller_decision_vectors_enum_controller_action(self):
+        """controller_action must be a valid enum value"""
+        for fname, decision in self._load_vectors():
+            action = decision["decision"]["controller_action"]
+            assert action in self.VALID_CONTROLLER_ACTIONS, \
+                f"{fname}: invalid controller_action '{action}'"
+
+    def test_controller_decision_vectors_enum_final_status(self):
+        """final_status must be a valid enum value"""
+        for fname, decision in self._load_vectors():
+            status = decision["decision"]["final_status"]
+            assert status in self.VALID_FINAL_STATUSES, \
+                f"{fname}: invalid final_status '{status}'"
+
+    def test_controller_decision_vectors_enum_handoff(self):
+        """handoff_recommendation must be a valid enum value"""
+        for fname, decision in self._load_vectors():
+            handoff = decision["decision"]["handoff_recommendation"]
+            assert handoff in self.VALID_HANDOFF, \
+                f"{fname}: invalid handoff_recommendation '{handoff}'"
+
+    def test_controller_decision_vectors_oracle_check_results(self):
+        """oracle_checks[].result must be a valid enum value"""
+        for fname, decision in self._load_vectors():
+            for check in decision["evidence"]["oracle_checks"]:
+                assert check["result"] in self.VALID_ORACLE_RESULTS, \
+                    f"{fname}: invalid oracle result '{check['result']}'"
+
+    def test_controller_decision_vectors_failure_kinds(self):
+        """failures[].kind must be a valid enum value"""
+        for fname, decision in self._load_vectors():
+            for failure in decision["evidence"]["failures"]:
+                assert failure["kind"] in self.VALID_FAILURE_KINDS, \
+                    f"{fname}: invalid failure kind '{failure['kind']}'"
+
+    def test_controller_decision_vectors_hash_lengths(self):
+        """prompt_hash and output_hash must be 64-char hex strings"""
+        for fname, decision in self._load_vectors():
+            for field in ("prompt_hash", "output_hash"):
+                h = decision["task"][field]
+                assert len(h) == 64, f"{fname}: {field} length {len(h)} != 64"
+                assert all(c in '0123456789abcdef' for c in h), \
+                    f"{fname}: {field} is not valid hex"
+
+    def test_controller_decision_vectors_schema_field(self):
+        """schema field must be 'controller_decision/v1'"""
+        for fname, decision in self._load_vectors():
+            assert decision["schema"] == "controller_decision/v1", \
+                f"{fname}: wrong schema value"
+
+
+# ============================================================================
+# Tau Table Tests
+# ============================================================================
+
+class TestTauTable:
+    """Tests for the per-(model_family, namespace) tau calibration table"""
+
+    TABLE_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'data', 'tau_table.json'
+    )
+    SCHEMA_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'schema', 'tau_table.schema.json'
+    )
+
+    def test_tau_table_file_exists(self):
+        """Tau table file should exist"""
+        assert os.path.exists(self.TABLE_PATH)
+
+    def test_tau_table_schema_file_exists(self):
+        """Tau table schema file should exist"""
+        assert os.path.exists(self.SCHEMA_PATH)
+
+    def test_tau_table_is_valid_json(self):
+        """Tau table should be valid JSON with required keys"""
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        assert "version" in table
+        assert "default_tau" in table
+        assert "entries" in table
+
+    def test_tau_table_default_tau(self):
+        """default_tau should be 0.05"""
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        assert table["default_tau"] == 0.05
+
+    def test_tau_table_has_known_families(self):
+        """entries should contain qwen3b, qwen7b, phi3"""
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        for family in ("qwen3b", "qwen7b", "phi3"):
+            assert family in table["entries"], f"Missing family: {family}"
+
+    def test_tau_table_all_values_are_floats(self):
+        """All tau values should be floats in [0, 1]"""
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        assert 0.0 <= table["default_tau"] <= 1.0
+        for family, ns_map in table["entries"].items():
+            for ns, val in ns_map.items():
+                assert isinstance(val, (int, float)), f"{family}.{ns} not numeric"
+                assert 0.0 <= val <= 1.0, f"{family}.{ns}={val} out of range"
+
+    def test_classify_model_family(self):
+        """_classify_model_family should map known model IDs correctly"""
+        from scripts.controller import _classify_model_family
+        assert _classify_model_family("Qwen/Qwen2.5-3B-Instruct") == "qwen3b"
+        assert _classify_model_family("Qwen/Qwen2.5-7B-Instruct") == "qwen7b"
+        assert _classify_model_family("microsoft/Phi-3-mini-4k-instruct") == "phi3"
+        assert _classify_model_family("microsoft/phi-3-mini") == "phi3"
+        assert _classify_model_family("meta-llama/Llama-3-8B") == "unknown"
+
+    def test_load_tau_table(self):
+        """load_tau_table should return a dict with expected structure"""
+        from scripts.controller import load_tau_table
+        table = load_tau_table(self.TABLE_PATH)
+        assert isinstance(table, dict)
+        assert "default_tau" in table
+        assert "entries" in table
+
+    def test_lookup_tau_known(self):
+        """lookup_tau should return calibrated value for known (family, namespace)"""
+        from scripts.controller import lookup_tau
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        val = lookup_tau(table, "Qwen/Qwen2.5-3B-Instruct", "pypi")
+        assert val == 0.05
+
+    def test_lookup_tau_unknown_family_falls_back(self):
+        """lookup_tau should fall back to default_tau for unknown model family"""
+        from scripts.controller import lookup_tau
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        val = lookup_tau(table, "meta-llama/Llama-3-8B", "pypi")
+        assert val == table["default_tau"]
+
+    def test_lookup_tau_unknown_namespace_falls_back(self):
+        """lookup_tau should fall back to default_tau for unknown namespace"""
+        from scripts.controller import lookup_tau
+        with open(self.TABLE_PATH) as f:
+            table = json.load(f)
+        val = lookup_tau(table, "Qwen/Qwen2.5-3B-Instruct", "arxiv")
+        assert val == table["default_tau"]
+
+
+# ============================================================================
 # Integration Tests
 # ============================================================================
 

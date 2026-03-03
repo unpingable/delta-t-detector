@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "controller_decision.v1.schema.json",
+  "title": "Controller Decision v1",
+  "description": "Governor-consumable decision emitted by the 3-way controller. Read by DetectorHandoffGate.",
+  "type": "object",
+  "required": ["schema", "task", "local_model", "decision", "evidence", "economics", "created_at"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "controller_decision/v1"
+    },
+    "task": {
+      "type": "object",
+      "required": ["task_id", "task_class", "namespace", "prompt_hash", "output_hash"],
+      "properties": {
+        "task_id":        { "type": "string" },
+        "task_class":     { "type": "string" },
+        "namespace":      { "type": "string" },
+        "prompt_hash":    { "type": "string", "minLength": 64, "maxLength": 64 },
+        "output_hash":    { "type": "string", "minLength": 64, "maxLength": 64 },
+        "request_nonce":  { "type": "string" },
+        "oracle_profile": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "local_model": {
+      "type": "object",
+      "required": ["model_id", "quant", "decoding", "controller_version"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "quant":    { "type": "string" },
+        "decoding": {
+          "type": "object",
+          "required": ["temperature", "retry_temperature", "seed"],
+          "properties": {
+            "temperature":       { "type": "number" },
+            "retry_temperature": { "type": "number" },
+            "seed":              { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        "controller_version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "decision": {
+      "type": "object",
+      "required": ["fork_risk", "tau_milliunits", "controller_action", "final_status", "handoff_recommendation"],
+      "properties": {
+        "fork_risk": {
+          "type": "object",
+          "required": ["metric", "value_milliunits", "window_k"],
+          "properties": {
+            "metric":           { "type": "string", "const": "prompt_min_margin" },
+            "value_milliunits": { "type": ["integer", "null"] },
+            "window_k":         { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "tau_milliunits":          { "type": "integer" },
+        "controller_action":       { "type": "string", "enum": ["FAST_PATH", "LOW_MARGIN_RETRY", "STOP"] },
+        "final_status":            { "type": "string", "enum": ["CLEAN", "LOW_MARGIN_RECOVERED", "CONFIDENT_WRONG", "KNOWLEDGE_BOUNDARY", "ORACLE_ERROR"] },
+        "handoff_recommendation":  { "type": "string", "enum": ["NONE", "ESCALATE_REMOTE", "ESCALATE_MODEL"] },
+        "decision_ttl_ms":         { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["candidates", "oracle_checks", "failures"],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "oracle_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["oracle", "query", "result", "latency_ms"],
+            "properties": {
+              "oracle":       { "type": "string" },
+              "query":        { "type": "string" },
+              "result":       { "type": "string", "enum": ["PASS", "FAIL", "ERROR"] },
+              "failure_kind": { "type": "string", "enum": ["NOT_FOUND", "MALFORMED"] },
+              "error_kind":   { "type": "string" },
+              "error":        { "type": "string" },
+              "latency_ms":   { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "message", "attempt"],
+            "properties": {
+              "kind":    { "type": "string", "enum": ["NOT_FOUND", "MALFORMED"] },
+              "message": { "type": "string" },
+              "attempt": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "controller_trace_ref": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "economics": {
+      "type": "object",
+      "required": ["local_tokens_spent", "retry_tokens_spent", "retry_count", "latency_ms", "oracle_latency_ms"],
+      "properties": {
+        "local_tokens_spent":  { "type": "integer", "minimum": 0 },
+        "retry_tokens_spent":  { "type": "integer", "minimum": 0 },
+        "retry_count":         { "type": "integer", "minimum": 0 },
+        "latency_ms":          { "type": "integer", "minimum": 0 },
+        "oracle_latency_ms":   { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "created_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}

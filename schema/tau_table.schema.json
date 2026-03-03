@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tau_table.schema.json",
+  "title": "Tau Calibration Table",
+  "description": "Per-(model_family, namespace) fork-risk threshold calibration. Used by the 3-way controller.",
+  "type": "object",
+  "required": ["version", "default_tau", "entries"],
+  "properties": {
+    "_comment":    { "type": "string" },
+    "version":     { "type": "string" },
+    "default_tau": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
